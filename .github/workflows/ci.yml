@@ -1,0 +1,224 @@
+# fitdistcp — main CI (Work Item W20)
+#
+# Reuses the SAME Docker image as local development (Dockerfile /
+# docker-compose.yml) so CI and local runs are byte-for-byte identical — no
+# "works on my machine" drift. The image is the single source of truth for the
+# Rust, R, and Python toolchains; the GitHub runner only needs Docker.
+#
+# Design references:
+#   plans/fitdistcp-rust-port-design.md §7 (correctness/validation),
+#   §9.3 (CI/packaging), §10 Phase 1f (validation & CI).
+#
+# Scope: W20 covers the core CI only (build / test / lint / R / Python) reusing
+# the Docker image. Multi-platform R checks (Linux/macOS/Windows) and
+# cibuildwheel wheels are W21 (packaging) and are intentionally NOT here.
+#
+# Every command below was verified locally inside the dev container with:
+#   docker compose run --rm dev <command>
+# See the job comments for the exact local equivalents.
+
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+# Cancel superseded runs on the same ref to save runner minutes.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+# Least privilege: CI only needs to read the repo.
+permissions:
+  contents: read
+
+env:
+  # Single image tag shared by the build job and every test job. The build job
+  # produces it; the test jobs pull it from the local Docker daemon via the
+  # uploaded artifact (see the `build-image` job).
+  IMAGE_TAG: fitdistcp-dev:ci
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Build the dev image once and export it as an artifact so the test jobs do
+  # not each rebuild it. This is the "reuse the Docker image" requirement.
+  # ---------------------------------------------------------------------------
+  build-image:
+    name: Build dev Docker image
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # Build from the repo Dockerfile (same context as docker compose build).
+      # Load into the local daemon so we can `docker save` it.
+      - name: Build image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          tags: ${{ env.IMAGE_TAG }}
+          load: true
+          # Cache layers between runs to keep CI fast.
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # Export the image to a tarball and upload it so downstream jobs can load
+      # the exact same image without rebuilding.
+      - name: Save image to tarball
+        run: docker save "$IMAGE_TAG" -o /tmp/fitdistcp-dev.tar
+
+      - name: Upload image artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: fitdistcp-dev-image
+          path: /tmp/fitdistcp-dev.tar
+          retention-days: 1
+
+  # ---------------------------------------------------------------------------
+  # Rust: build / test / clippy / fmt / bench (compile check).
+  #
+  # Matrix over the pinned toolchain (rust-toolchain.toml = 1.85.0) and the
+  # image's default `stable`, so we catch both "pinned" and "latest stable"
+  # regressions. The pinned toolchain is what the image installs by default;
+  # the matrix entry selects it explicitly via `rustup run`.
+  #
+  # Local equivalents:
+  #   docker compose run --rm dev cargo build --workspace
+  #   docker compose run --rm dev cargo test --workspace
+  #   docker compose run --rm dev cargo clippy --workspace --all-targets -- -D warnings
+  #   docker compose run --rm dev cargo fmt --check
+  #   docker compose run --rm dev cargo bench --workspace --no-run
+  # ---------------------------------------------------------------------------
+  rust:
+    name: Rust (${{ matrix.toolchain }})
+    needs: build-image
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # "pinned" = the 1.85.0 toolchain from rust-toolchain.toml (installed in
+        # the image); "stable" = the image's default stable toolchain.
+        toolchain: [pinned, stable]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download dev image
+        uses: actions/download-artifact@v4
+        with:
+          name: fitdistcp-dev-image
+          path: /tmp
+
+      - name: Load dev image
+        run: docker load -i /tmp/fitdistcp-dev.tar
+
+      # Resolve the cargo invocation for the matrix entry. The image installs
+      # both `stable` and `1.85.0`; `rustup run <toolchain> cargo ...` selects
+      # one without touching rust-toolchain.toml.
+      - name: Select toolchain
+        id: tc
+        run: |
+          if [ "${{ matrix.toolchain }}" = "pinned" ]; then
+            echo "cargo=rustup run 1.85.0 cargo" >> "$GITHUB_OUTPUT"
+          else
+            echo "cargo=rustup run stable cargo" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: cargo build --workspace
+        run: |
+          docker run --rm -v "$PWD":/workspace -w /workspace "$IMAGE_TAG" \
+            bash -lc "${{ steps.tc.outputs.cargo }} build --workspace"
+
+      - name: cargo test --workspace
+        run: |
+          docker run --rm -v "$PWD":/workspace -w /workspace "$IMAGE_TAG" \
+            bash -lc "${{ steps.tc.outputs.cargo }} test --workspace"
+
+      - name: cargo clippy --workspace --all-targets -- -D warnings
+        run: |
+          docker run --rm -v "$PWD":/workspace -w /workspace "$IMAGE_TAG" \
+            bash -lc "${{ steps.tc.outputs.cargo }} clippy --workspace --all-targets -- -D warnings"
+
+      - name: cargo fmt --check
+        run: |
+          docker run --rm -v "$PWD":/workspace -w /workspace "$IMAGE_TAG" \
+            bash -lc "${{ steps.tc.outputs.cargo }} fmt --check"
+
+      # Compile-check the criterion benches (a full `cargo bench` run is too
+      # slow for PR CI; W16 owns the benchmark baselines).
+      - name: cargo bench --workspace --no-run
+        run: |
+          docker run --rm -v "$PWD":/workspace -w /workspace "$IMAGE_TAG" \
+            bash -lc "${{ steps.tc.outputs.cargo }} bench --workspace --no-run"
+
+  # ---------------------------------------------------------------------------
+  # R: testthat suite via the documented `devtools::load_all` workflow.
+  #
+  # W21 resolved the workspace-resolution problem: the R crate is now a
+  # standalone Cargo workspace and the core + third-party crates are vendored
+  # into the package by `tools/vendor-r-crate.sh`, so the tarball builds in
+  # isolation. The CRAN-style tarball build + `R CMD check` runs in the release
+  # workflow (.github/workflows/release.yml); this job keeps the fast
+  # `devtools::load_all` + testthat loop for PR CI.
+  #
+  # Local equivalent:
+  #   docker compose run --rm dev bash -lc "cd crates/fitdistcp-r && \
+  #     R -e \"devtools::load_all(quiet=TRUE); \
+  #            testthat::test_dir('tests/testthat', stop_on_failure=TRUE)\""
+  # ---------------------------------------------------------------------------
+  r:
+    name: R (testthat via load_all)
+    needs: build-image
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download dev image
+        uses: actions/download-artifact@v4
+        with:
+          name: fitdistcp-dev-image
+          path: /tmp
+
+      - name: Load dev image
+        run: docker load -i /tmp/fitdistcp-dev.tar
+
+      - name: R testthat suite (devtools::load_all + testthat::test_dir)
+        run: |
+          docker run --rm -v "$PWD":/workspace -w /workspace "$IMAGE_TAG" \
+            bash -lc "cd crates/fitdistcp-r && R -e \"devtools::load_all(quiet=TRUE); testthat::test_dir('tests/testthat', stop_on_failure=TRUE)\""
+
+  # ---------------------------------------------------------------------------
+  # Python: maturin develop + pytest.
+  #
+  # Local equivalent:
+  #   docker compose run --rm dev bash -lc "cd crates/fitdistcp-py && \
+  #     python3 -m venv .venv && . .venv/bin/activate && \
+  #     pip install --quiet numpy pytest && maturin develop --quiet && pytest -q"
+  # ---------------------------------------------------------------------------
+  python:
+    name: Python (maturin develop + pytest)
+    needs: build-image
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download dev image
+        uses: actions/download-artifact@v4
+        with:
+          name: fitdistcp-dev-image
+          path: /tmp
+
+      - name: Load dev image
+        run: docker load -i /tmp/fitdistcp-dev.tar
+
+      - name: maturin develop + pytest
+        run: |
+          docker run --rm -v "$PWD":/workspace -w /workspace "$IMAGE_TAG" \
+            bash -lc "cd crates/fitdistcp-py && python3 -m venv .venv && . .venv/bin/activate && pip install --quiet numpy pytest && maturin develop --quiet && pytest -q"

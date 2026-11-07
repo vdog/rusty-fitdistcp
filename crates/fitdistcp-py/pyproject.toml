@@ -1,0 +1,81 @@
+[build-system]
+requires = ["maturin>=1.5,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "fitdistcp"
+version = "0.1.0"
+description = "Calibrating prior prediction for distributions (Rust port, Python bindings)."
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+authors = [{ name = "fitdistcp authors", email = "noreply@example.com" }]
+keywords = ["statistics", "distribution", "prediction", "calibrating-prior", "rust"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Rust",
+    "Programming Language :: Python :: Implementation :: CPython",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering :: Mathematics",
+]
+dependencies = ["numpy>=1.22"]
+
+[project.urls]
+Repository = "https://github.com/stephenjewson/fitdistcp"
+
+[project.optional-dependencies]
+test = ["pytest>=7.0"]
+
+[tool.maturin]
+module-name = "fitdistcp"
+manifest-path = "Cargo.toml"
+features = ["pyo3/extension-module"]
+# Build abi3 wheels so a single wheel per platform works across CPython 3.9+.
+# (Requires the crate to be abi3-compatible; see the release workflow.)
+# Uncomment once the abi3 feature is wired through Cargo.toml:
+#   compatibility = "manylinux2014"
+#   features = ["pyo3/extension-module", "pyo3/abi3-py39"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+# ---------------------------------------------------------------------------
+# cibuildwheel (W21): build manylinux / macOS / Windows wheels for PyPI.
+#
+# Driven by the release workflow (.github/workflows/release.yml) and runnable
+# locally with:
+#   docker compose run --rm dev bash -lc "cd crates/fitdistcp-py && \
+#     CIBW_BUILD='cp39-*' cibuildwheel --platform linux"
+#
+# The Rust toolchain is provided by the cibuildwheel manylinux images (they
+# ship rustup); macOS/Windows runners install it via the workflow.
+# ---------------------------------------------------------------------------
+[tool.cibuildwheel]
+# Build for CPython 3.9–3.13 on all platforms.
+build = "cp39-* cp310-* cp311-* cp312-* cp313-*"
+skip = "*-musllinux_*"
+# Run the test suite against each built wheel.
+test-command = "python -c \"import fitdistcp; print(fitdistcp.__version__ if hasattr(fitdistcp, '__version__') else 'ok')\""
+test-requires = ["pytest", "numpy"]
+# Build the wheel from the crate directory (the Cargo workspace root is one
+# level up; maturin resolves the workspace automatically).
+before-all = "rustup default stable"
+
+[tool.cibuildwheel.linux]
+# manylinux2014 (glibc 2.17) for broad compatibility.
+manylinux-x86_64-image = "manylinux2014"
+manylinux-aarch64-image = "manylinux2014"
+
+[tool.cibuildwheel.macos]
+# Build for both Intel and Apple Silicon.
+archs = ["x86_64", "arm64"]
+
+[tool.cibuildwheel.windows]
+archs = ["AMD64"]

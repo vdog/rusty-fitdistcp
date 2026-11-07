@@ -1,0 +1,47 @@
+[package]
+name = "fitdistcp-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Binding-agnostic numerics core for fitdistcp (calibrating prior prediction)."
+
+[lib]
+name = "fitdistcp_core"
+crate-type = ["rlib"]
+
+[dependencies]
+# Numerics dependencies (versions pinned in the workspace manifest).
+# `special`/`statrs` provide gamma/digamma/trigamma and distribution CDFs/quantiles
+# (§4.3); `nalgebra` backs linear algebra for MLE and the information matrix;
+# `argmin` provides the BFGS optimizer (§4.2); `rayon` enables data-parallel
+# evaluation over prediction grids and quantile batches (§6).
+special = { workspace = true }
+statrs = { workspace = true }
+nalgebra = { workspace = true }
+argmin = { workspace = true }
+rayon = { workspace = true }
+
+[dev-dependencies]
+# W16: Criterion benchmarks for the performance-critical paths (§6). These are
+# dev-only and never linked into the library or the binding crates.
+criterion = { workspace = true }
+# W18: `rand` drives the reltest reliability simulation (fixed-seed Monte Carlo).
+# Dev-only: the library itself stays free of RNG state so it remains deterministic.
+rand = { workspace = true }
+rand_distr = { workspace = true }
+
+# W16 benchmark targets. `harness = false` hands `main` to Criterion so the
+# benches are excluded from the normal `cargo test` run (§6, W16 constraint).
+[[bench]]
+name = "derivatives"
+harness = false
+
+[[bench]]
+name = "dmgs_expansion"
+harness = false
+
+[[bench]]
+name = "mle_fitting"
+harness = false

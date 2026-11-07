@@ -1,0 +1,224 @@
+# fitdistcp — release / packaging workflow (Work Item W21)
+#
+# Builds the two distributable artifacts:
+#   1. the CRAN-style R source tarball (with the Rust crates vendored so it
+#      builds in isolation), and
+#   2. PyPI wheels for manylinux / macOS / Windows via cibuildwheel.
+#
+# Design references:
+#   plans/fitdistcp-rust-port-design.md §11 (CRAN policy: vendor crates),
+#   §10 Phase 1f (CRAN-style R CMD check + cibuildwheel PyPI wheels).
+#
+# The R job reuses the SAME Docker image as local development and CI (the
+# single source of truth for the toolchains). The wheel jobs use cibuildwheel's
+# own manylinux/macOS/Windows images, which ship the Rust toolchain.
+#
+# Trigger: manual dispatch, or pushing a tag like `v0.1.0`.
+#
+# PUBLISHING:
+#   * PyPI — the `publish-pypi` job uploads the wheels + sdist using PyPI
+#     Trusted Publishing (OIDC; no API token stored). It is gated on the
+#     `pypi` GitHub environment, so it only runs once that environment is
+#     configured with a trusted publisher for this repo/workflow. Until then
+#     the job is skipped and the wheels are only attached to the GitHub
+#     release.
+#   * CRAN — CRAN does not accept automated uploads from CI. The R source
+#     tarball is attached to the GitHub release and must be submitted manually
+#     via `devtools::submit_cran()` / the CRAN web form (see cran-comments.md).
+#   * GitHub release — both the tarball and the wheels are always attached.
+
+name: Release
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+env:
+  IMAGE_TAG: fitdistcp-dev:release
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # R: vendor the Rust crates, build the source tarball, and run R CMD check.
+  # ---------------------------------------------------------------------------
+  r-tarball:
+    name: R source tarball + R CMD check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build dev image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          tags: ${{ env.IMAGE_TAG }}
+          load: true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # Vendor the core crate + third-party crates into the R package, refresh
+      # the roxygen2 docs, then build the tarball. The vendor tree is generated
+      # here (not committed); the man/ pages are committed but regenerated to be
+      # safe.
+      - name: Vendor Rust crates, refresh docs, and build tarball
+        run: |
+          docker run --rm -v "$PWD":/workspace -w /workspace "$IMAGE_TAG" \
+            bash -lc "bash tools/vendor-r-crate.sh && \
+                      cd crates/fitdistcp-r && \
+                      R -e 'roxygen2::roxygenise(load_code = \"source\")' && \
+                      R CMD build ."
+
+      - name: R CMD check (no manual)
+        run: |
+          docker run --rm -v "$PWD":/workspace -w /workspace "$IMAGE_TAG" \
+            bash -lc "mkdir -p /workspace/.rcheck && \
+                      cp /workspace/crates/fitdistcp-r/fitdistcp_*.tar.gz /workspace/.rcheck/ && \
+                      cd /workspace/.rcheck && \
+                      R CMD check --no-manual fitdistcp_*.tar.gz"
+
+      - name: Upload R tarball
+        uses: actions/upload-artifact@v4
+        with:
+          name: r-source-tarball
+          path: crates/fitdistcp-r/fitdistcp_*.tar.gz
+          if-no-files-found: error
+
+      - name: Upload R check log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: r-check-log
+          path: .rcheck/fitdistcp.Rcheck/00check.log
+          if-no-files-found: ignore
+
+  # ---------------------------------------------------------------------------
+  # Python: build wheels for Linux / macOS / Windows via cibuildwheel.
+  # ---------------------------------------------------------------------------
+  wheels:
+    name: Wheels (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install cibuildwheel
+        run: python -m pip install --upgrade cibuildwheel
+
+      - name: Build wheels
+        working-directory: crates/fitdistcp-py
+        run: python -m cibuildwheel --output-dir wheelhouse
+
+      - name: Upload wheels
+        uses: actions/upload-artifact@v4
+        with:
+          name: wheels-${{ matrix.os }}
+          path: crates/fitdistcp-py/wheelhouse/*.whl
+          if-no-files-found: error
+
+  # ---------------------------------------------------------------------------
+  # Python sdist (source distribution) for PyPI.
+  # ---------------------------------------------------------------------------
+  sdist:
+    name: Python sdist
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install maturin
+        run: python -m pip install --upgrade "maturin>=1.5,<2.0"
+
+      - name: Build sdist
+        working-directory: crates/fitdistcp-py
+        run: maturin sdist --out dist
+
+      - name: Upload sdist
+        uses: actions/upload-artifact@v4
+        with:
+          name: sdist
+          path: crates/fitdistcp-py/dist/*.tar.gz
+          if-no-files-found: error
+
+  # ---------------------------------------------------------------------------
+  # Publish: attach the tarball + wheels to a GitHub release (tag pushes only).
+  # ---------------------------------------------------------------------------
+  publish:
+    name: Publish release assets
+    needs: [r-tarball, wheels, sdist]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/r-source-tarball/*.tar.gz
+            dist/wheels-*/*.whl
+            dist/sdist/*.tar.gz
+          generate_release_notes: true
+
+  # ---------------------------------------------------------------------------
+  # Publish to PyPI via Trusted Publishing (OIDC). Gated on the `pypi`
+  # environment: configure a trusted publisher for this repo + workflow in the
+  # PyPI project settings, then this job uploads on tag pushes. Until the
+  # environment exists the job is skipped (the wheels are still on the GitHub
+  # release).
+  # ---------------------------------------------------------------------------
+  publish-pypi:
+    name: Publish to PyPI
+    needs: [wheels, sdist]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/p/fitdistcp
+    permissions:
+      id-token: write
+    steps:
+      - name: Download wheels
+        uses: actions/download-artifact@v4
+        with:
+          pattern: wheels-*
+          path: dist
+          merge-multiple: true
+
+      - name: Download sdist
+        uses: actions/download-artifact@v4
+        with:
+          name: sdist
+          path: dist
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist

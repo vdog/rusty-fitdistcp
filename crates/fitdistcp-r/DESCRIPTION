@@ -1,0 +1,21 @@
+Package: fitdistcp
+Title: Calibrating Prior Prediction for Distributions (Rust Port)
+Version: 0.1.0
+Authors@R:
+    person("fitdistcp", "authors", email = "noreply@example.com", role = c("aut", "cre"))
+Description: Rust-backed implementation of calibrating prior prediction (CP)
+    for a representative set of distributions, exposed to R via extendr.
+    Provides the reference d/p/q/r + t***_cp API for the ten Phase-1 models
+    (norm, norm_p1, genextreme, genextreme_p1, genpareto, gumbel, lnorm,
+    weibull, gamma, expon), returning the reference field names (ml_pdf,
+    cp_pdf, ml_quantiles, cp_quantiles, ml_params, AIC/MAIC, standard errors,
+    convergence, and the small-n flag).
+License: MIT + file LICENSE
+Encoding: UTF-8
+Roxygen: list(markdown = TRUE)
+Depends: R (>= 4.0)
+Suggests: testthat (>= 3.0.0)
+Config/testthat/edition: 3
+SystemRequirements: Cargo (Rust's package manager), rustc (>= 1.85)
+Config/rextendr/version: 0.5.0
+Config/roxygen2/version: 8.1.1

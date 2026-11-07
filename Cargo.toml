@@ -1,0 +1,52 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/fitdistcp-core",
+    "crates/fitdistcp-py",
+]
+# The R binding crate (`crates/fitdistcp-r/src/rust`) is intentionally NOT a
+# member of this workspace. CRAN policy requires the R package to build in
+# isolation from a tarball, so that crate declares its own `[workspace]` table
+# and depends on a vendored copy of the core crate shipped inside the package
+# (see `crates/fitdistcp-r/src/rust/Cargo.toml` and `tools/vendor-r-crate.sh`).
+# Build it standalone with:
+#   cargo build --manifest-path crates/fitdistcp-r/src/rust/Cargo.toml
+exclude = [
+    "crates/fitdistcp-r/src/rust",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+repository = "https://github.com/stephenjewson/fitdistcp"
+# 1.85 is required by PyO3 0.30 (edition 2024 dependencies).
+rust-version = "1.85"
+
+[workspace.dependencies]
+fitdistcp-core = { path = "crates/fitdistcp-core" }
+
+# Numerics (used by the core crate in later phases)
+nalgebra = "0.33"
+statrs = "0.17"
+special = "0.11"
+argmin = "0.10"
+rayon = "1.10"
+
+# Benchmarking (W16). Criterion drives the `benches/` targets in the core crate;
+# the bench targets are registered with `harness = false` so they never run as
+# part of `cargo test`.
+criterion = { version = "0.5", features = ["html_reports"] }
+
+# W18: fixed-seed Monte Carlo for the reltest reliability simulation (dev-only).
+rand = "0.8"
+rand_distr = "0.4"
+
+# Bindings
+extendr-api = "0.7"
+pyo3 = { version = "0.30", features = ["extension-module"] }
+numpy = "0.30"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1

@@ -1,0 +1,112 @@
+[1m[32m    Finished[0m `bench` profile [optimized] target(s) in 0.02s
+[1m[32m     Running[0m benches/mle_fitting.rs (target/release/deps/mle_fitting-1ce2bfee3d20d045)
+Gnuplot not found, using plotters backend
+Benchmarking mle/fit/norm/50
+Benchmarking mle/fit/norm/50: Warming up for 500.00 ms
+Benchmarking mle/fit/norm/50: Collecting 20 samples in estimated 1.5010 s (250k iterations)
+Benchmarking mle/fit/norm/50: Analyzing
+mle/fit/norm/50         time:   [5.9561 µs 5.9780 µs 5.9987 µs]
+                        thrpt:  [8.3351 Melem/s 8.3640 Melem/s 8.3948 Melem/s]
+Found 6 outliers among 20 measurements (30.00%)
+  1 (5.00%) low severe
+  2 (10.00%) low mild
+  2 (10.00%) high mild
+  1 (5.00%) high severe
+Benchmarking mle/fit/gamma/50
+Benchmarking mle/fit/gamma/50: Warming up for 500.00 ms
+Benchmarking mle/fit/gamma/50: Collecting 20 samples in estimated 1.5064 s (17k iterations)
+Benchmarking mle/fit/gamma/50: Analyzing
+mle/fit/gamma/50        time:   [89.590 µs 89.832 µs 90.136 µs]
+                        thrpt:  [554.72 Kelem/s 556.59 Kelem/s 558.10 Kelem/s]
+Found 3 outliers among 20 measurements (15.00%)
+  2 (10.00%) high mild
+  1 (5.00%) high severe
+Benchmarking mle/fit/genextreme/50
+Benchmarking mle/fit/genextreme/50: Warming up for 500.00 ms
+Benchmarking mle/fit/genextreme/50: Collecting 20 samples in estimated 1.5429 s (1050 iterations)
+Benchmarking mle/fit/genextreme/50: Analyzing
+mle/fit/genextreme/50   time:   [1.4641 ms 1.4684 ms 1.4733 ms]
+                        thrpt:  [33.937 Kelem/s 34.050 Kelem/s 34.151 Kelem/s]
+Found 2 outliers among 20 measurements (10.00%)
+  1 (5.00%) low severe
+  1 (5.00%) high mild
+Benchmarking mle/fit/norm/500
+Benchmarking mle/fit/norm/500: Warming up for 500.00 ms
+Benchmarking mle/fit/norm/500: Collecting 20 samples in estimated 1.5171 s (7140 iterations)
+Benchmarking mle/fit/norm/500: Analyzing
+mle/fit/norm/500        time:   [210.28 µs 211.51 µs 212.71 µs]
+                        thrpt:  [2.3506 Melem/s 2.3639 Melem/s 2.3777 Melem/s]
+Found 2 outliers among 20 measurements (10.00%)
+  2 (10.00%) high mild
+Benchmarking mle/fit/gamma/500
+Benchmarking mle/fit/gamma/500: Warming up for 500.00 ms
+Benchmarking mle/fit/gamma/500: Collecting 20 samples in estimated 1.6946 s (630 iterations)
+Benchmarking mle/fit/gamma/500: Analyzing
+mle/fit/gamma/500       time:   [2.6965 ms 2.7060 ms 2.7187 ms]
+                        thrpt:  [183.91 Kelem/s 184.77 Kelem/s 185.43 Kelem/s]
+Found 3 outliers among 20 measurements (15.00%)
+  1 (5.00%) low mild
+  1 (5.00%) high mild
+  1 (5.00%) high severe
+Benchmarking mle/fit/genextreme/500
+Benchmarking mle/fit/genextreme/500: Warming up for 500.00 ms
+Benchmarking mle/fit/genextreme/500: Collecting 20 samples in estimated 2.0599 s (630 iterations)
+Benchmarking mle/fit/genextreme/500: Analyzing
+mle/fit/genextreme/500  time:   [3.2507 ms 3.2551 ms 3.2591 ms]
+                        thrpt:  [153.42 Kelem/s 153.60 Kelem/s 153.81 Kelem/s]
+Found 3 outliers among 20 measurements (15.00%)
+  1 (5.00%) low severe
+  1 (5.00%) high mild
+  1 (5.00%) high severe
+Benchmarking mle/fit/norm/5000
+Benchmarking mle/fit/norm/5000: Warming up for 500.00 ms
+Benchmarking mle/fit/norm/5000: Collecting 20 samples in estimated 1.7582 s (1050 iterations)
+Benchmarking mle/fit/norm/5000: Analyzing
+mle/fit/norm/5000       time:   [1.6550 ms 1.6594 ms 1.6657 ms]
+                        thrpt:  [3.0017 Melem/s 3.0131 Melem/s 3.0211 Melem/s]
+Found 1 outliers among 20 measurements (5.00%)
+  1 (5.00%) high severe
+Benchmarking mle/fit/gamma/5000
+Benchmarking mle/fit/gamma/5000: Warming up for 500.00 ms
+
+Warning: Unable to complete 20 samples in 1.5s. You may wish to increase target time to 2.9s, enable flat sampling, or reduce sample count to 10.
+Benchmarking mle/fit/gamma/5000: Collecting 20 samples in estimated 2.8667 s (210 iterations)
+Benchmarking mle/fit/gamma/5000: Analyzing
+mle/fit/gamma/5000      time:   [13.680 ms 13.743 ms 13.816 ms]
+                        thrpt:  [361.89 Kelem/s 363.82 Kelem/s 365.49 Kelem/s]
+Found 2 outliers among 20 measurements (10.00%)
+  1 (5.00%) low severe
+  1 (5.00%) high severe
+Benchmarking mle/fit/genextreme/5000
+Benchmarking mle/fit/genextreme/5000: Warming up for 500.00 ms
+Benchmarking mle/fit/genextreme/5000: Collecting 20 samples in estimated 1.5557 s (60 iterations)
+Benchmarking mle/fit/genextreme/5000: Analyzing
+mle/fit/genextreme/5000 time:   [25.708 ms 25.763 ms 25.818 ms]
+                        thrpt:  [193.67 Kelem/s 194.08 Kelem/s 194.49 Kelem/s]
+
+Benchmarking mle/predict_end_to_end/norm
+Benchmarking mle/predict_end_to_end/norm: Warming up for 500.00 ms
+Benchmarking mle/predict_end_to_end/norm: Collecting 20 samples in estimated 1.5144 s (11k iterations)
+Benchmarking mle/predict_end_to_end/norm: Analyzing
+mle/predict_end_to_end/norm
+                        time:   [137.46 µs 138.64 µs 140.54 µs]
+                        thrpt:  [3.5576 Melem/s 3.6065 Melem/s 3.6374 Melem/s]
+Benchmarking mle/predict_end_to_end/gamma
+Benchmarking mle/predict_end_to_end/gamma: Warming up for 500.00 ms
+Benchmarking mle/predict_end_to_end/gamma: Collecting 20 samples in estimated 1.5584 s (1050 iterations)
+Benchmarking mle/predict_end_to_end/gamma: Analyzing
+mle/predict_end_to_end/gamma
+                        time:   [1.4535 ms 1.4583 ms 1.4627 ms]
+                        thrpt:  [341.82 Kelem/s 342.86 Kelem/s 343.99 Kelem/s]
+Found 2 outliers among 20 measurements (10.00%)
+  2 (10.00%) low mild
+Benchmarking mle/predict_end_to_end/genextreme
+Benchmarking mle/predict_end_to_end/genextreme: Warming up for 500.00 ms
+Benchmarking mle/predict_end_to_end/genextreme: Collecting 20 samples in estimated 1.6193 s (100 iterations)
+Benchmarking mle/predict_end_to_end/genextreme: Analyzing
+mle/predict_end_to_end/genextreme
+                        time:   [16.108 ms 16.167 ms 16.242 ms]
+                        thrpt:  [30.785 Kelem/s 30.927 Kelem/s 31.040 Kelem/s]
+Found 2 outliers among 20 measurements (10.00%)
+  2 (10.00%) high severe
+

@@ -1,0 +1,40 @@
+{
+  "name": "fitdistcp (Rust + R + Python)",
+  "build": {
+    "dockerfile": "../Dockerfile",
+    "context": ".."
+  },
+  "workspaceFolder": "/workspace",
+  "workspaceMount": "source=${localWorkspaceFolder},target=/workspace,type=bind,consistency=cached",
+  "mounts": [
+    "source=fitdistcp-cargo-registry,target=/usr/local/cargo/registry,type=volume",
+    "source=fitdistcp-cargo-git,target=/usr/local/cargo/git,type=volume",
+    "source=fitdistcp-cargo-target,target=/workspace/target,type=volume"
+  ],
+  "remoteEnv": {
+    "CARGO_HOME": "/usr/local/cargo",
+    "RUSTUP_HOME": "/usr/local/rustup",
+    "CARGO_TERM_COLOR": "always"
+  },
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "rust-lang.rust-analyzer",
+        "vadimcn.vscode-lldb",
+        "REditorSupport.r",
+        "ms-python.python",
+        "ms-python.vscode-pylance",
+        "tamasfe.even-better-toml"
+      ],
+      "settings": {
+        "rust-analyzer.cargo.features": "all",
+        "editor.formatOnSave": true,
+        "[rust]": {
+          "editor.defaultFormatter": "rust-lang.rust-analyzer"
+        }
+      }
+    }
+  },
+  "postCreateCommand": "cargo fetch || true",
+  "remoteUser": "root"
+}

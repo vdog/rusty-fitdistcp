@@ -1,0 +1,192 @@
+[1m[32m    Finished[0m `bench` profile [optimized] target(s) in 0.02s
+[1m[32m     Running[0m benches/dmgs_expansion.rs (target/release/deps/dmgs_expansion-5385aaca0ea37ec2)
+Gnuplot not found, using plotters backend
+Benchmarking dmgs/cp_pdf/norm/10
+Benchmarking dmgs/cp_pdf/norm/10: Warming up for 500.00 ms
+Benchmarking dmgs/cp_pdf/norm/10: Collecting 20 samples in estimated 1.5000 s (3.1M iterations)
+Benchmarking dmgs/cp_pdf/norm/10: Analyzing
+dmgs/cp_pdf/norm/10     time:   [480.55 ns 483.80 ns 486.62 ns]
+                        thrpt:  [20.550 Melem/s 20.670 Melem/s 20.809 Melem/s]
+Found 1 outliers among 20 measurements (5.00%)
+  1 (5.00%) low mild
+Benchmarking dmgs/cp_pdf/norm/100
+Benchmarking dmgs/cp_pdf/norm/100: Warming up for 500.00 ms
+Benchmarking dmgs/cp_pdf/norm/100: Collecting 20 samples in estimated 1.5002 s (929k iterations)
+Benchmarking dmgs/cp_pdf/norm/100: Analyzing
+dmgs/cp_pdf/norm/100    time:   [1.5815 µs 1.5859 µs 1.5912 µs]
+                        thrpt:  [62.848 Melem/s 63.056 Melem/s 63.233 Melem/s]
+Found 2 outliers among 20 measurements (10.00%)
+  1 (5.00%) low mild
+  1 (5.00%) high severe
+Benchmarking dmgs/cp_pdf/norm/1000
+Benchmarking dmgs/cp_pdf/norm/1000: Warming up for 500.00 ms
+Benchmarking dmgs/cp_pdf/norm/1000: Collecting 20 samples in estimated 1.5005 s (114k iterations)
+Benchmarking dmgs/cp_pdf/norm/1000: Analyzing
+dmgs/cp_pdf/norm/1000   time:   [13.103 µs 13.121 µs 13.140 µs]
+                        thrpt:  [76.103 Melem/s 76.212 Melem/s 76.318 Melem/s]
+Found 1 outliers among 20 measurements (5.00%)
+  1 (5.00%) high severe
+Benchmarking dmgs/cp_pdf/gamma/10
+Benchmarking dmgs/cp_pdf/gamma/10: Warming up for 500.00 ms
+Benchmarking dmgs/cp_pdf/gamma/10: Collecting 20 samples in estimated 1.5003 s (1.0M iterations)
+Benchmarking dmgs/cp_pdf/gamma/10: Analyzing
+dmgs/cp_pdf/gamma/10    time:   [1.4859 µs 1.4879 µs 1.4904 µs]
+                        thrpt:  [6.7098 Melem/s 6.7208 Melem/s 6.7297 Melem/s]
+Found 2 outliers among 20 measurements (10.00%)
+  1 (5.00%) low mild
+  1 (5.00%) high severe
+Benchmarking dmgs/cp_pdf/gamma/100
+Benchmarking dmgs/cp_pdf/gamma/100: Warming up for 500.00 ms
+Benchmarking dmgs/cp_pdf/gamma/100: Collecting 20 samples in estimated 1.5016 s (110k iterations)
+Benchmarking dmgs/cp_pdf/gamma/100: Analyzing
+dmgs/cp_pdf/gamma/100   time:   [13.690 µs 13.738 µs 13.799 µs]
+                        thrpt:  [7.2469 Melem/s 7.2790 Melem/s 7.3047 Melem/s]
+Found 2 outliers among 20 measurements (10.00%)
+  1 (5.00%) high mild
+  1 (5.00%) high severe
+Benchmarking dmgs/cp_pdf/gamma/1000
+Benchmarking dmgs/cp_pdf/gamma/1000: Warming up for 500.00 ms
+Benchmarking dmgs/cp_pdf/gamma/1000: Collecting 20 samples in estimated 1.5169 s (11k iterations)
+Benchmarking dmgs/cp_pdf/gamma/1000: Analyzing
+dmgs/cp_pdf/gamma/1000  time:   [135.12 µs 135.82 µs 136.67 µs]
+                        thrpt:  [7.3168 Melem/s 7.3629 Melem/s 7.4007 Melem/s]
+Found 2 outliers among 20 measurements (10.00%)
+  1 (5.00%) high mild
+  1 (5.00%) high severe
+Benchmarking dmgs/cp_pdf/genextreme/10
+Benchmarking dmgs/cp_pdf/genextreme/10: Warming up for 500.00 ms
+Benchmarking dmgs/cp_pdf/genextreme/10: Collecting 20 samples in estimated 1.5049 s (17k iterations)
+Benchmarking dmgs/cp_pdf/genextreme/10: Analyzing
+dmgs/cp_pdf/genextreme/10
+                        time:   [87.189 µs 88.058 µs 88.984 µs]
+                        thrpt:  [112.38 Kelem/s 113.56 Kelem/s 114.69 Kelem/s]
+Found 4 outliers among 20 measurements (20.00%)
+  1 (5.00%) low mild
+  3 (15.00%) high mild
+Benchmarking dmgs/cp_pdf/genextreme/100
+Benchmarking dmgs/cp_pdf/genextreme/100: Warming up for 500.00 ms
+Benchmarking dmgs/cp_pdf/genextreme/100: Collecting 20 samples in estimated 1.5062 s (15k iterations)
+Benchmarking dmgs/cp_pdf/genextreme/100: Analyzing
+dmgs/cp_pdf/genextreme/100
+                        time:   [97.831 µs 98.543 µs 99.142 µs]
+                        thrpt:  [1.0087 Melem/s 1.0148 Melem/s 1.0222 Melem/s]
+Benchmarking dmgs/cp_pdf/genextreme/1000
+Benchmarking dmgs/cp_pdf/genextreme/1000: Warming up for 500.00 ms
+Benchmarking dmgs/cp_pdf/genextreme/1000: Collecting 20 samples in estimated 1.5174 s (7350 iterations)
+Benchmarking dmgs/cp_pdf/genextreme/1000: Analyzing
+dmgs/cp_pdf/genextreme/1000
+                        time:   [205.93 µs 206.85 µs 207.82 µs]
+                        thrpt:  [4.8120 Melem/s 4.8343 Melem/s 4.8561 Melem/s]
+Found 3 outliers among 20 measurements (15.00%)
+  1 (5.00%) low severe
+  1 (5.00%) high mild
+  1 (5.00%) high severe
+
+Benchmarking dmgs/cp_quantiles/norm/10
+Benchmarking dmgs/cp_quantiles/norm/10: Warming up for 500.00 ms
+Benchmarking dmgs/cp_quantiles/norm/10: Collecting 20 samples in estimated 1.5001 s (2.2M iterations)
+Benchmarking dmgs/cp_quantiles/norm/10: Analyzing
+dmgs/cp_quantiles/norm/10
+                        time:   [655.36 ns 658.15 ns 661.59 ns]
+                        thrpt:  [15.115 Melem/s 15.194 Melem/s 15.259 Melem/s]
+Found 2 outliers among 20 measurements (10.00%)
+  1 (5.00%) low severe
+  1 (5.00%) high severe
+Benchmarking dmgs/cp_quantiles/norm/100
+Benchmarking dmgs/cp_quantiles/norm/100: Warming up for 500.00 ms
+Benchmarking dmgs/cp_quantiles/norm/100: Collecting 20 samples in estimated 1.5000 s (443k iterations)
+Benchmarking dmgs/cp_quantiles/norm/100: Analyzing
+dmgs/cp_quantiles/norm/100
+                        time:   [3.3590 µs 3.3669 µs 3.3745 µs]
+                        thrpt:  [29.634 Melem/s 29.700 Melem/s 29.771 Melem/s]
+Found 1 outliers among 20 measurements (5.00%)
+  1 (5.00%) high mild
+Benchmarking dmgs/cp_quantiles/norm/1000
+Benchmarking dmgs/cp_quantiles/norm/1000: Warming up for 500.00 ms
+Benchmarking dmgs/cp_quantiles/norm/1000: Collecting 20 samples in estimated 1.5015 s (49k iterations)
+Benchmarking dmgs/cp_quantiles/norm/1000: Analyzing
+dmgs/cp_quantiles/norm/1000
+                        time:   [30.316 µs 30.448 µs 30.624 µs]
+                        thrpt:  [32.654 Melem/s 32.843 Melem/s 32.986 Melem/s]
+Found 4 outliers among 20 measurements (20.00%)
+  1 (5.00%) low severe
+  2 (10.00%) high mild
+  1 (5.00%) high severe
+Benchmarking dmgs/cp_quantiles/gamma/10
+Benchmarking dmgs/cp_quantiles/gamma/10: Warming up for 500.00 ms
+Benchmarking dmgs/cp_quantiles/gamma/10: Collecting 20 samples in estimated 1.5057 s (54k iterations)
+Benchmarking dmgs/cp_quantiles/gamma/10: Analyzing
+dmgs/cp_quantiles/gamma/10
+                        time:   [27.195 µs 27.424 µs 27.620 µs]
+                        thrpt:  [362.05 Kelem/s 364.64 Kelem/s 367.72 Kelem/s]
+Benchmarking dmgs/cp_quantiles/gamma/100
+Benchmarking dmgs/cp_quantiles/gamma/100: Warming up for 500.00 ms
+Benchmarking dmgs/cp_quantiles/gamma/100: Collecting 20 samples in estimated 1.5156 s (5040 iterations)
+Benchmarking dmgs/cp_quantiles/gamma/100: Analyzing
+dmgs/cp_quantiles/gamma/100
+                        time:   [295.41 µs 296.62 µs 297.98 µs]
+                        thrpt:  [335.60 Kelem/s 337.13 Kelem/s 338.52 Kelem/s]
+Found 4 outliers among 20 measurements (20.00%)
+  2 (10.00%) low mild
+  2 (10.00%) high severe
+Benchmarking dmgs/cp_quantiles/gamma/1000
+Benchmarking dmgs/cp_quantiles/gamma/1000: Warming up for 500.00 ms
+Benchmarking dmgs/cp_quantiles/gamma/1000: Collecting 20 samples in estimated 1.8863 s (630 iterations)
+Benchmarking dmgs/cp_quantiles/gamma/1000: Analyzing
+dmgs/cp_quantiles/gamma/1000
+                        time:   [2.9774 ms 2.9871 ms 2.9970 ms]
+                        thrpt:  [333.67 Kelem/s 334.77 Kelem/s 335.86 Kelem/s]
+Benchmarking dmgs/cp_quantiles/genextreme/10
+Benchmarking dmgs/cp_quantiles/genextreme/10: Warming up for 500.00 ms
+Benchmarking dmgs/cp_quantiles/genextreme/10: Collecting 20 samples in estimated 1.5164 s (5460 iterations)
+Benchmarking dmgs/cp_quantiles/genextreme/10: Analyzing
+dmgs/cp_quantiles/genextreme/10
+                        time:   [271.44 µs 273.70 µs 277.16 µs]
+                        thrpt:  [36.080 Kelem/s 36.537 Kelem/s 36.841 Kelem/s]
+Found 2 outliers among 20 measurements (10.00%)
+  2 (10.00%) high severe
+Benchmarking dmgs/cp_quantiles/genextreme/100
+Benchmarking dmgs/cp_quantiles/genextreme/100: Warming up for 500.00 ms
+Benchmarking dmgs/cp_quantiles/genextreme/100: Collecting 20 samples in estimated 1.5220 s (5250 iterations)
+Benchmarking dmgs/cp_quantiles/genextreme/100: Analyzing
+dmgs/cp_quantiles/genextreme/100
+                        time:   [280.31 µs 281.38 µs 282.61 µs]
+                        thrpt:  [353.84 Kelem/s 355.39 Kelem/s 356.75 Kelem/s]
+Found 1 outliers among 20 measurements (5.00%)
+  1 (5.00%) low mild
+Benchmarking dmgs/cp_quantiles/genextreme/1000
+Benchmarking dmgs/cp_quantiles/genextreme/1000: Warming up for 500.00 ms
+Benchmarking dmgs/cp_quantiles/genextreme/1000: Collecting 20 samples in estimated 1.5811 s (3990 iterations)
+Benchmarking dmgs/cp_quantiles/genextreme/1000: Analyzing
+dmgs/cp_quantiles/genextreme/1000
+                        time:   [390.96 µs 392.77 µs 394.72 µs]
+                        thrpt:  [2.5335 Melem/s 2.5460 Melem/s 2.5578 Melem/s]
+Found 1 outliers among 20 measurements (5.00%)
+  1 (5.00%) high mild
+
+Benchmarking dmgs/cp_pdf_quantile_derived/genextreme/10
+Benchmarking dmgs/cp_pdf_quantile_derived/genextreme/10: Warming up for 500.00 ms
+Benchmarking dmgs/cp_pdf_quantile_derived/genextreme/10: Collecting 20 samples in estimated 1.5116 s (8610 iterations)
+Benchmarking dmgs/cp_pdf_quantile_derived/genextreme/10: Analyzing
+dmgs/cp_pdf_quantile_derived/genextreme/10
+                        time:   [174.65 µs 174.98 µs 175.44 µs]
+                        thrpt:  [57.001 Kelem/s 57.148 Kelem/s 57.258 Kelem/s]
+Found 1 outliers among 20 measurements (5.00%)
+  1 (5.00%) low mild
+Benchmarking dmgs/cp_pdf_quantile_derived/genextreme/100
+Benchmarking dmgs/cp_pdf_quantile_derived/genextreme/100: Warming up for 500.00 ms
+Benchmarking dmgs/cp_pdf_quantile_derived/genextreme/100: Collecting 20 samples in estimated 1.5203 s (7770 iterations)
+Benchmarking dmgs/cp_pdf_quantile_derived/genextreme/100: Analyzing
+dmgs/cp_pdf_quantile_derived/genextreme/100
+                        time:   [195.60 µs 195.88 µs 196.16 µs]
+                        thrpt:  [509.80 Kelem/s 510.52 Kelem/s 511.25 Kelem/s]
+Benchmarking dmgs/cp_pdf_quantile_derived/genextreme/1000
+Benchmarking dmgs/cp_pdf_quantile_derived/genextreme/1000: Warming up for 500.00 ms
+Benchmarking dmgs/cp_pdf_quantile_derived/genextreme/1000: Collecting 20 samples in estimated 1.5397 s (3780 iterations)
+Benchmarking dmgs/cp_pdf_quantile_derived/genextreme/1000: Analyzing
+dmgs/cp_pdf_quantile_derived/genextreme/1000
+                        time:   [405.18 µs 405.98 µs 406.75 µs]
+                        thrpt:  [2.4585 Melem/s 2.4632 Melem/s 2.4681 Melem/s]
+Found 1 outliers among 20 measurements (5.00%)
+  1 (5.00%) low severe
+

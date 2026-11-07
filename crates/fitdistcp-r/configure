@@ -1,0 +1,41 @@
+#!/bin/sh
+# W21 packaging — configure script for the fitdistcp R package.
+#
+# CRAN policy (§11 of the design) requires the package to build in isolation
+# from a tarball, with no access to the repository's top-level Cargo workspace.
+# This script prepares the Rust build so that `R CMD INSTALL` / `R CMD check`
+# can compile the extendr staticlib offline:
+#
+#   1. Ensures the vendored copy of the core crate is present at
+#      src/rust/fitdistcp-core (it is shipped in the tarball; this is a
+#      belt-and-braces check).
+#   2. Ensures the third-party crate vendor tree at src/rust/vendor and the
+#      matching src/rust/.cargo/config.toml exist. If they are missing (e.g. a
+#      source checkout rather than a release tarball) it runs `cargo vendor`,
+#      which requires network access.
+#
+# The vendor tree is large (~110 MB) and is intentionally NOT committed to the
+# repository; release tarballs are produced by `tools/vendor-r-crate.sh` which
+# populates it before `R CMD build`.
+
+set -e
+
+RUST_DIR="src/rust"
+VENDOR_DIR="${RUST_DIR}/vendor"
+CARGO_CFG="${RUST_DIR}/.cargo/config.toml"
+
+if [ ! -d "${RUST_DIR}/fitdistcp-core" ]; then
+    echo "configure: ERROR: vendored core crate ${RUST_DIR}/fitdistcp-core is missing." >&2
+    echo "configure: run tools/vendor-r-crate.sh before building the tarball." >&2
+    exit 1
+fi
+
+if [ ! -d "${VENDOR_DIR}" ] || [ ! -f "${CARGO_CFG}" ]; then
+    echo "configure: vendored crates not found; running 'cargo vendor' (needs network)."
+    mkdir -p "${RUST_DIR}/.cargo"
+    cargo vendor --manifest-path "${RUST_DIR}/Cargo.toml" "${VENDOR_DIR}" \
+        > "${CARGO_CFG}"
+fi
+
+echo "configure: Rust build prepared (vendored crates present)."
+exit 0

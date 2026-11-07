@@ -1,0 +1,38 @@
+# Convenience wrapper for the fitdistcp dev environment.
+#
+#   docker compose build
+#   docker compose run --rm dev bash
+#   docker compose run --rm dev cargo test
+#   docker compose run --rm dev cargo clippy --all-targets -- -D warnings
+#   docker compose run --rm dev R CMD check .
+#   docker compose run --rm dev maturin develop
+#   docker compose run --rm dev pytest
+#
+# Named volumes cache the Cargo registry/git and the R package library so
+# rebuilds are fast and offline-friendly.
+
+services:
+  dev:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: fitdistcp-dev:latest
+    working_dir: /workspace
+    volumes:
+      - .:/workspace
+      - cargo-registry:/usr/local/cargo/registry
+      - cargo-git:/usr/local/cargo/git
+      - cargo-target:/workspace/target
+      # NOTE: no volume over /usr/local/lib/R/site-library — the R packages are
+      # baked into the image, and a named volume there would shadow them.
+    environment:
+      CARGO_HOME: /usr/local/cargo
+      RUSTUP_HOME: /usr/local/rustup
+      CARGO_TERM_COLOR: always
+    tty: true
+    stdin_open: true
+
+volumes:
+  cargo-registry:
+  cargo-git:
+  cargo-target:

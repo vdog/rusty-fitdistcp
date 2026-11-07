@@ -1,0 +1,57 @@
+# Standalone manifest for the R binding crate (W21 packaging).
+#
+# CRAN policy (§11 of the design) requires the package to build in isolation:
+# `R CMD build` produces a tarball that is unpacked and built on a machine that
+# has no access to this repository's top-level Cargo workspace. The previous
+# manifest inherited `version`/`edition`/... from `workspace.package`, which
+# fails with:
+#
+#   error inheriting `edition` from workspace root manifest's
+#   `workspace.package.edition` ... failed to find a workspace root
+#
+# To make the crate self-contained we:
+#   1. declare an (empty) `[workspace]` table so cargo treats THIS manifest as
+#      its own workspace root even when the crate is nested inside the repo's
+#      top-level workspace (the top-level workspace no longer lists this crate
+#      as a member — see the root Cargo.toml);
+#   2. spell out every field explicitly instead of inheriting it;
+#   3. depend on a *vendored copy* of the core crate that ships inside the R
+#      package (`./fitdistcp-core`), not on the repo path `../../../fitdistcp-core`.
+#
+# The `configure` script runs `cargo vendor` to populate `./vendor` and writes
+# `./.cargo/config.toml`, so the tarball build needs no network access once the
+# vendor tree is present (see `tools/vendor-r-crate.sh`).
+
+[package]
+name = "fitdistcp-r"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+repository = "https://github.com/stephenjewson/fitdistcp"
+rust-version = "1.85"
+description = "extendr R bindings for fitdistcp."
+
+# Opt out of the repository's top-level Cargo workspace so the crate is its own
+# workspace root and builds standalone from the CRAN tarball.
+[workspace]
+
+[lib]
+# Distinct from the Python binding's `fitdistcp` lib name to avoid an output
+# filename collision in the shared workspace `target/` directory. The R package
+# name (and the extendr module name) remain `fitdistcp`.
+#
+# `staticlib` only: the archive is linked into the R package's `fitdistcp.so`,
+# so there is no runtime dependency on a separate shared object.
+name = "fitdistcp_r"
+crate-type = ["staticlib"]
+
+[dependencies]
+# Vendored copy of the numerics core, shipped inside the R package so the
+# tarball is self-contained. Kept in sync with `crates/fitdistcp-core` by
+# `tools/vendor-r-crate.sh`.
+fitdistcp-core = { path = "fitdistcp-core" }
+extendr-api = "0.7"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1

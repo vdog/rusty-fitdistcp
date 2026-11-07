@@ -1,0 +1,17 @@
+[package]
+name = "fitdistcp-py"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "PyO3 Python bindings for fitdistcp."
+
+[lib]
+name = "fitdistcp"
+crate-type = ["cdylib"]
+
+[dependencies]
+fitdistcp-core.workspace = true
+pyo3.workspace = true
+numpy.workspace = true

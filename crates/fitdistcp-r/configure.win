@@ -1,0 +1,29 @@
+#!/bin/sh
+# W21 packaging — Windows configure script for the fitdistcp R package.
+#
+# Mirrors `configure` (POSIX) for the Windows toolchain. R on Windows runs this
+# under the MSYS2/Rtools shell, so the same POSIX logic applies. The vendored
+# core crate and third-party vendor tree are shipped in the tarball; if they are
+# absent (source checkout) we regenerate them with `cargo vendor`.
+
+set -e
+
+RUST_DIR="src/rust"
+VENDOR_DIR="${RUST_DIR}/vendor"
+CARGO_CFG="${RUST_DIR}/.cargo/config.toml"
+
+if [ ! -d "${RUST_DIR}/fitdistcp-core" ]; then
+    echo "configure.win: ERROR: vendored core crate ${RUST_DIR}/fitdistcp-core is missing." >&2
+    echo "configure.win: run tools/vendor-r-crate.sh before building the tarball." >&2
+    exit 1
+fi
+
+if [ ! -d "${VENDOR_DIR}" ] || [ ! -f "${CARGO_CFG}" ]; then
+    echo "configure.win: vendored crates not found; running 'cargo vendor' (needs network)."
+    mkdir -p "${RUST_DIR}/.cargo"
+    cargo vendor --manifest-path "${RUST_DIR}/Cargo.toml" "${VENDOR_DIR}" \
+        > "${CARGO_CFG}"
+fi
+
+echo "configure.win: Rust build prepared (vendored crates present)."
+exit 0
