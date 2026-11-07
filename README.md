@@ -4,41 +4,145 @@ A Rust reimplementation of the R/Python package `fitdistcp` (calibrating prior
 prediction), with thin R (extendr) and Python (PyO3) bindings over one shared,
 binding-agnostic numerics core.
 
+`fitdistcp` calibrates a prior prediction by correcting an MLE-based predictive
+density with a DMGS asymptotic-expansion bias term, producing a **calibrated
+prior (CP)** predictive density and quantiles. This port provides the same
+`d/p/q/r` + `t***_cp` (R) and `pdf/cdf/ppf/rvs` (Python) surface, backed by a
+single Rust core so both bindings return identical numerics.
+
 See [`plans/fitdistcp-rust-port-design.md`](plans/fitdistcp-rust-port-design.md)
 for the full design and phased plan.
 
-## Status: Phase 0 — Docker dev environment + scaffolding
+## Status: Phase 1 complete
 
-Phase 0 delivers the reproducible dev environment and the Cargo workspace
-skeleton. No numerics yet — the goal is to prove that **extendr and PyO3 can
-both build against one shared core crate** and return identical results, all
-inside Docker.
+Phase 1 (the standard DMGS asymptotic-expansion integration path) is
+**implemented, tested, benchmarked, and packaged**. All quality gates are green:
 
-## Layout
+- **Core numerics** — special functions, MLE fitting, analytic-first
+  derivatives, DMGS expansion, and 10 models are implemented in
+  `fitdistcp-core`.
+- **Bindings** — R (53 exported functions) and Python (40 exported functions)
+  are complete, with predictor handling for `norm_p1` / `genextreme_p1`.
+- **Tests** — 144 core unit tests + 17 golden/integration tests + 141 R testthat
+  assertions + 27 Python pytest tests, all passing.
+- **Quality gates** — `cargo clippy --workspace --all-targets -- -D warnings`
+  and `cargo fmt --check` are clean.
+- **Packaging** — `R CMD build`/`INSTALL`/`check` succeeds (1 WARNING + 1 NOTE,
+  both inherent to Rust-backed CRAN packages and documented in
+  [`cran-comments.md`](crates/fitdistcp-r/cran-comments.md)); `maturin build`
+  produces a working wheel.
+
+**Phase 2 (posterior sampling) is deferred** — see
+[Known differences / limitations](#known-differences--limitations).
+
+## Repository layout
 
 ```
 fitdistcp/
-├── Cargo.toml                  # workspace manifest
-├── rust-toolchain.toml         # pinned Rust 1.85.0
-├── Dockerfile                  # Ubuntu 26.04 + Rust + R + Python toolchains
-├── docker-compose.yml          # dev wrapper + cache volumes
-├── .devcontainer/              # VS Code devcontainer
+├── Cargo.toml                       # workspace manifest
+├── rust-toolchain.toml              # pinned Rust 1.85.0
+├── Dockerfile                       # Ubuntu + Rust + R + Python toolchains
+├── docker-compose.yml               # dev wrapper + cache volumes
+├── .devcontainer/                   # VS Code devcontainer
 ├── crates/
-│   ├── fitdistcp-core/         # binding-agnostic numerics (no extendr/pyo3)
-│   ├── fitdistcp-r/            # extendr binding (R package skeleton)
-│   └── fitdistcp-py/           # PyO3 binding (maturin)
-├── tests/golden/               # (Phase 1f) R + Python golden fixtures
-└── benches/                    # (Phase 1e) criterion benchmarks
+│   ├── fitdistcp-core/              # binding-agnostic numerics (no extendr/pyo3)
+│   │   ├── src/
+│   │   │   ├── special/             # ln_gamma, gamma, digamma, trigamma, tetragamma,
+│   │   │   │                        #   ln_beta, erf, erfc, Student-t helpers
+│   │   │   ├── models/              # 10 Phase-1 models + Derivatives trait + numerical fallback
+│   │   │   ├── mle/                 # BFGS primary + Newton fallback, SEs, AIC, small-n flag
+│   │   │   ├── dmgs/                # DMGS expansion + Haar-prior terms + bias correction
+│   │   │   └── api.rs               # shared binding-agnostic structs + entry points
+│   │   ├── benches/                 # Criterion benchmarks + baselines + HOT_LOOPS.md
+│   │   └── tests/                   # golden/integration harnesses
+│   ├── fitdistcp-r/                 # extendr binding (R package)
+│   │   ├── R/extendr-wrappers.R     # auto-generated wrappers
+│   │   ├── man/                     # 53 generated .Rd pages
+│   │   ├── NAMESPACE, DESCRIPTION   # CRAN-ready
+│   │   ├── configure, configure.win # vendored-crate build hooks
+│   │   └── cran-comments.md
+│   └── fitdistcp-py/                # PyO3 binding (maturin)
+│       ├── src/lib.rs
+│       └── pyproject.toml           # maturin + cibuildwheel config
+├── tests/golden/                    # committed golden fixtures + tolerance policy
+│   ├── mle_golden.json
+│   ├── cp_golden.json
+│   ├── gev_negshape_golden.json
+│   ├── w11_cp_golden.json
+│   ├── TOLERANCE.md
+│   └── README.md
+├── tools/                           # fixture generators + vendoring helpers
+│   ├── generate_golden.R
+│   ├── generate_cp_golden.R
+│   ├── generate_gev_negshape_golden.R
+│   ├── generate_w11_cp_golden.R
+│   └── vendor-r-crate.sh
+└── .github/workflows/               # ci.yml + release.yml
 ```
+
+## Implemented API surface
+
+### Models (10, Phase 1)
+
+`norm`, `norm_p1`, `genextreme` (GEV), `genextreme_p1`, `genpareto` (GPD),
+`gumbel`, `lnorm`, `weibull`, `gamma`, `expon`.
+
+`norm_p1` and `genextreme_p1` are the predictor variants (handling `t`, `t0`,
+`n0`).
+
+### R binding (`crates/fitdistcp-r`) — 53 exported functions
+
+For each of the 10 models, the `d/p/q/r` family plus the `t***_cp` calibrated
+prior entry point:
+
+- `dnorm_cp`, `pnorm_cp`, `qnorm_cp`, `rnorm_cp`, `tnorm_cp`
+- `dnorm_p1_cp`, `pnorm_p1_cp`, `qnorm_p1_cp`, `rnorm_p1_cp`, `tnorm_p1_cp`
+- `dgev_cp`, `pgev_cp`, `qgev_cp`, `rgev_cp`, `tgev_cp`
+- `dgev_p1_cp`, `pgev_p1_cp`, `qgev_p1_cp`, `rgev_p1_cp`, `tgev_p1_cp`
+- `dgpd_k1_cp`, `pgpd_k1_cp`, `qgpd_k1_cp`, `rgpd_k1_cp`, `tgpd_k1_cp`
+- `dgumbel_cp`, `pgumbel_cp`, `qgumbel_cp`, `rgumbel_cp`, `tgumbel_cp`
+- `dlnorm_cp`, `plnorm_cp`, `qlnorm_cp`, `rlnorm_cp`, `tlnorm_cp`
+- `dweibull_cp`, `pweibull_cp`, `qweibull_cp`, `rweibull_cp`, `tweibull_cp`
+- `dgamma_cp`, `pgamma_cp`, `qgamma_cp`, `rgamma_cp`, `tgamma_cp`
+- `dexp_cp`, `pexp_cp`, `qexp_cp`, `rexp_cp`, `texp_cp`
+
+Plus the shared helpers `core_version`, `add_vectors`, `sum_values`,
+`fitdistcp_params`. The package uses the `rextendr` layout; `NAMESPACE` and 53
+man pages are generated, and `DESCRIPTION` is finalized for CRAN.
+
+### Python binding (`crates/fitdistcp-py`) — 40 exported functions
+
+For each of the 10 models, the `pdf/cdf/ppf/rvs` family:
+
+- `norm_pdf`, `norm_cdf`, `norm_ppf`, `norm_rvs`
+- `norm_p1_pdf`, `norm_p1_cdf`, `norm_p1_ppf`, `norm_p1_rvs`
+- `gev_pdf`, `gev_cdf`, `gev_ppf`, `gev_rvs`
+- `gev_p1_pdf`, `gev_p1_cdf`, `gev_p1_ppf`, `gev_p1_rvs`
+- `gpd_pdf`, `gpd_cdf`, `gpd_ppf`, `gpd_rvs`
+- `gumbel_pdf`, `gumbel_cdf`, `gumbel_ppf`, `gumbel_rvs`
+- `lnorm_pdf`, `lnorm_cdf`, `lnorm_ppf`, `lnorm_rvs`
+- `weibull_pdf`, `weibull_cdf`, `weibull_ppf`, `weibull_rvs`
+- `gamma_pdf`, `gamma_cdf`, `gamma_ppf`, `gamma_rvs`
+- `expon_pdf`, `expon_cdf`, `expon_ppf`, `expon_rvs`
+
+Built with PyO3 + maturin; `cibuildwheel` configuration lives in
+[`pyproject.toml`](crates/fitdistcp-py/pyproject.toml).
+
+### Shared core API (`crates/fitdistcp-core/src/api.rs`)
+
+Binding-agnostic structs and entry points used by both bindings:
+`FitResult`, `MleFit`, `PredictionRequest`, `Convergence`, plus `predict`,
+`predict_gev`, `predict_norm_p1`, and `predict_gev_p1`.
 
 ## Prerequisites
 
 Only **Docker** (or Podman). No Rust, R, or Python installs are required on the
 host — the container is the single source of truth for all toolchains.
 
-The image is based on **Ubuntu 26.04 LTS** and pins **Rust 1.85.0** (via
-`rust-toolchain.toml`), **R 4.6.x** (CRAN apt repo), and the system **Python
-3.14** (with PyO3 0.30 / numpy 0.30, which support it).
+The image is based on **Ubuntu** and pins **Rust 1.85.0** (via
+`rust-toolchain.toml`), **R** (CRAN apt repo), and the system **Python** (with
+PyO3 / numpy versions that support it), plus `maturin`, `pytest`, and
+`cibuildwheel`.
 
 ## Quick start
 
@@ -48,20 +152,92 @@ docker compose build
 
 # Interactive shell with the workspace bind-mounted.
 docker compose run --rm dev bash
-
-# Rust core: build, test, lint.
-docker compose run --rm dev cargo build
-docker compose run --rm dev cargo test
-docker compose run --rm dev cargo clippy --all-targets -- -D warnings
-
-# R binding (Phase 0 smoke test).
-docker compose run --rm dev bash -lc "cd crates/fitdistcp-r && R -e \"devtools::load_all(quiet=TRUE); print(core_version()); print(add_vectors(c(1,2,3), c(4,5,6))); print(sum_values(c(1,2,3,4)))\""
-
-# Python binding (Phase 0 smoke test).
-docker compose run --rm dev bash -lc "cd crates/fitdistcp-py && python3 -m venv .venv && . .venv/bin/activate && pip install --quiet numpy && maturin develop --quiet && python -c 'import fitdistcp, numpy as np; print(fitdistcp.core_version()); print(fitdistcp.add_vectors(np.array([1.,2.,3.]), np.array([4.,5.,6.]))); print(fitdistcp.sum_values(np.array([1.,2.,3.,4.])))'"
 ```
 
-## Continuous integration (W20)
+### Rust core: build, test, lint
+
+```sh
+docker compose run --rm dev cargo build --workspace
+docker compose run --rm dev cargo test --workspace
+docker compose run --rm dev cargo clippy --workspace --all-targets -- -D warnings
+docker compose run --rm dev cargo fmt --check
+```
+
+### R binding: testthat
+
+The R package's `Cargo.toml` is a member of the top-level Cargo workspace, so
+`devtools::load_all()` is the supported path (rather than `R CMD INSTALL`):
+
+```sh
+docker compose run --rm dev bash -lc \
+  "cd crates/fitdistcp-r && R -e \"devtools::load_all(quiet=TRUE); testthat::test_dir('tests/testthat')\""
+```
+
+### Python binding: maturin develop + pytest
+
+```sh
+docker compose run --rm dev bash -lc \
+  "cd crates/fitdistcp-py && python3 -m venv .venv && . .venv/bin/activate \
+   && pip install --quiet numpy pytest && maturin develop --quiet && pytest"
+```
+
+## Benchmarks
+
+Criterion benchmarks live under
+[`crates/fitdistcp-core/benches/`](crates/fitdistcp-core/benches/) —
+`derivatives`, `dmgs_expansion`, and `mle_fitting` — with committed baselines
+(`*_baseline.txt`) and a hand-off note in
+[`HOT_LOOPS.md`](crates/fitdistcp-core/benches/HOT_LOOPS.md).
+
+```sh
+docker compose run --rm dev cargo bench -p fitdistcp-core --bench derivatives
+docker compose run --rm dev cargo bench -p fitdistcp-core --bench dmgs_expansion
+docker compose run --rm dev cargo bench -p fitdistcp-core --bench mle_fitting
+```
+
+Performance optimizations have been applied (up to **16×** on mixed
+derivatives, **2.1×** on gamma/GEV quantiles) with no tolerance regression; the
+before/after numbers are recorded in `HOT_LOOPS.md`.
+
+## Golden fixtures & tolerance policy
+
+The committed fixtures in [`tests/golden/`](tests/golden/) are generated from
+the reference **`fitdistcp` v0.2.3** R package and loaded by the test harnesses
+from disk (no network or reference package needed at test time). The tolerance
+policy is the single source of truth in
+[`tests/golden/TOLERANCE.md`](tests/golden/TOLERANCE.md); see
+[`tests/golden/README.md`](tests/golden/README.md) for the fixture inventory.
+
+### Regenerating the fixtures
+
+All generation runs inside the Docker dev container (no host R toolchain
+required):
+
+```sh
+# 1. Build the dev image (once).
+docker compose build
+
+# 2. Clone the reference package at the pinned version (once).
+docker compose run --rm dev bash -lc \
+  'git clone --depth 1 --branch v0.2.3 \
+     https://github.com/stephenjewson/fitdistcp.git tools/fitdistcp-ref'
+
+# 3. Regenerate each fixture (order is independent).
+docker compose run --rm dev Rscript tools/generate_golden.R
+docker compose run --rm dev Rscript tools/generate_cp_golden.R
+docker compose run --rm dev Rscript tools/generate_gev_negshape_golden.R
+docker compose run --rm dev Rscript tools/generate_w11_cp_golden.R
+
+# 4. Confirm the suite still passes at the documented tolerances.
+docker compose run --rm dev cargo test --workspace
+```
+
+The generators `source()` the reference package's own routines and embed fixed
+datasets, so the fixtures are reproducible byte-for-byte. Do **not** silently
+loosen a tolerance; any intentional relaxation must be recorded in
+`TOLERANCE.md` with its rationale.
+
+## Continuous integration & packaging
 
 CI lives in [`.github/workflows/ci.yml`](.github/workflows/ci.yml) and **reuses
 the same Docker image as local development** — the runner only needs Docker, and
@@ -78,29 +254,57 @@ Jobs:
   `cargo clippy --workspace --all-targets -- -D warnings`, `cargo fmt --check`,
   and `cargo bench --workspace --no-run` (bench compile check).
 - **`r`** — the testthat suite via the documented `devtools::load_all()` +
-  `testthat::test_dir()` workflow. (`devtools::install()` / `R CMD INSTALL` fail
-  here because the R package's `Cargo.toml` is a member of the top-level Cargo
-  workspace; `load_all` is the supported path.)
+  `testthat::test_dir()` workflow.
 - **`python`** — `maturin develop` + `pytest` in a venv.
 
-Triggered on every `push` and `pull_request`. Multi-platform R checks
-(Linux/macOS/Windows) and `cibuildwheel` wheels are **W21 (packaging)** and are
-intentionally out of scope for W20.
+Triggered on every `push` and `pull_request`.
 
-The workflow YAML is validated with `actionlint` (and `pyyaml`); the underlying
-commands are verified locally inside the dev container.
+[`.github/workflows/release.yml`](.github/workflows/release.yml) handles
+packaging: the R source tarball, `cibuildwheel` wheels, and PyPI publishing via
+Trusted Publishing.
 
-## Phase 0 milestone
+### Packaging status
 
-Container builds; both bindings call a trivial core function
-(`add_vectors` / `sum_values`) and return identical results, all inside Docker.
+- **R:** `R CMD build` / `INSTALL` / `check` succeeds with **1 WARNING + 1
+  NOTE**, both inherent to Rust-backed CRAN packages and documented in
+  [`cran-comments.md`](crates/fitdistcp-r/cran-comments.md). Rust crates are
+  vendored for standalone builds via
+  [`tools/vendor-r-crate.sh`](tools/vendor-r-crate.sh), with `configure` /
+  `configure.win` build hooks.
+- **Python:** `maturin build` produces a working wheel.
+
+## Known differences / limitations
+
+These are deliberate, documented differences from the reference package, not
+bugs:
+
+- **Gamma DMGS is parameterization-dependent.** The reference uses
+  `(shape, scale)`; the Rust port uses `(shape, rate)`. Results agree after the
+  parameterization is accounted for.
+- **GEV third derivatives remain numerical.** The reference's `gev_logfddd` is a
+  ~180-line machine-generated expression, impractical to transcribe; the port
+  uses the numerical fallback behind the `Derivatives` trait.
+- **`norm_p1` sigma convention.** The reference reports the unbiased `n − 1`
+  estimate; the Rust port reports the true MLE (`n`).
+- **Small-n handling.** DMGS degrades below `n ≈ 10`; the port flags small-n
+  results rather than silently degrading, and the golden tolerance is relaxed
+  for `n < 10` (see `TOLERANCE.md`).
+
+### Phase 2 (deferred)
+
+The following are **not** implemented in Phase 1 and are explicitly deferred:
+
+- `t***_cp` posterior sampling (Northrop `rust` interop).
+- WAIC / log scores.
+- Two-predictor GEV (`qgev_p12_cp`).
 
 ## Roadmap
 
-- **Phase 1a** — core numerics foundation (special functions, MLE, derivatives)
-- **Phase 1b** — DMGS expansion
-- **Phase 1c** — DMGS models + edge cases
-- **Phase 1d** — bindings (R `d/p/q/r` + `t***_cp`, Python `pdf/cdf/ppf/rvs`)
-- **Phase 1e** — performance (Rayon, SIMD, caching)
-- **Phase 1f** — validation & CI
-- **Phase 2** — posterior sampling (deferred)
+- **Phase 0** — Docker dev environment + scaffolding ✅
+- **Phase 1a** — core numerics foundation (special functions, MLE, derivatives) ✅
+- **Phase 1b** — DMGS expansion ✅
+- **Phase 1c** — DMGS models + edge cases ✅
+- **Phase 1d** — bindings (R `d/p/q/r` + `t***_cp`, Python `pdf/cdf/ppf/rvs`) ✅
+- **Phase 1e** — performance (benchmarks, hot-loop optimizations) ✅
+- **Phase 1f** — validation, golden fixtures, CI, packaging ✅
+- **Phase 2** — posterior sampling, WAIC/log scores, two-predictor GEV (deferred)
