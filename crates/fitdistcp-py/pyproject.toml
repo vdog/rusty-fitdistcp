@@ -117,7 +117,17 @@ archs = ["x86_64", "arm64"]
 #     = note: the `x86_64-apple-darwin` target may not be installed
 # Install the pinned toolchain AND add the x86_64 target so both arches build.
 # (The generic `before-all` above only installs the host toolchain.)
-before-all = "curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain 1.85.0 && rustup target add x86_64-apple-darwin --toolchain 1.85.0"
+before-all = "echo '=== DIAG: rustup show ===' && rustup show && echo '=== DIAG: which cargo-clippy ===' && (which cargo-clippy || true) && echo '=== DIAG: rustup component list (1.85.0) ===' && (rustup component list --toolchain 1.85.0 || true) && echo '=== DIAG: rustup toolchain list ===' && rustup toolchain list && curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain 1.85.0 && rustup component add rustfmt clippy --toolchain 1.85.0 && rustup target add x86_64-apple-darwin --toolchain 1.85.0 && echo '=== DIAG: post-install rustup show ===' && rustup show && echo '=== DIAG: post-install component list ===' && (rustup component list --toolchain 1.85.0 || true)"
 
 [tool.cibuildwheel.windows]
 archs = ["AMD64"]
+# The top-level `before-all` above is a POSIX/Linux command (`curl | sh`,
+# `$HOME`, `ln -sf /usr/local/bin/...`). Windows inherits it unless overridden,
+# and Windows has no `/usr/local/bin`, so `ln` fails with:
+#   ln: failed to create symbolic link '/usr/local/bin/cargo': No such file or directory
+# The GitHub Windows runner already ships a Rust toolchain, but we still pin it
+# to 1.85.0 (matching rust-toolchain.toml) so local, CI, and wheel builds all use
+# the same compiler. `rustup toolchain install` is idempotent: it is a no-op when
+# the toolchain is already present. cibuildwheel runs `before-all` via cmd.exe on
+# Windows, so this uses cmd-compatible syntax (no `sh`, `ln`, or `$HOME`).
+before-all = "rustup toolchain install 1.85.0 --profile minimal --no-self-update && rustup default 1.85.0"

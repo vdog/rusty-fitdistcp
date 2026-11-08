@@ -115,9 +115,23 @@ jobs:
       - name: Install cibuildwheel
         run: python -m pip install --upgrade cibuildwheel
 
+      # Run cibuildwheel from the REPOSITORY ROOT and pass the package directory
+      # as the positional PACKAGE argument. cibuildwheel copies the *working
+      # directory* (the "project") into the build container on Linux, and the
+      # PACKAGE argument selects which subdirectory to build. If we instead ran
+      # cibuildwheel from `crates/fitdistcp-py` (as before), only that directory
+      # would be copied, so the Cargo workspace root `Cargo.toml` (one level up)
+      # would be absent and the crate's `edition.workspace = true` /
+      # `version.workspace = true` inheritance would fail with:
+      #   error inheriting `edition` from workspace root manifest's
+      #   `workspace.package.edition` ... failed to find a workspace root
+      # Building from the repo root keeps the workspace root manifest (and
+      # Cargo.lock) in the build context so maturin/cargo can resolve it.
+      #
+      # NOTE: cibuildwheel 4.x takes the package as a positional argument
+      # (`cibuildwheel <PACKAGE>`); there is no `--package-dir` flag.
       - name: Build wheels
-        working-directory: crates/fitdistcp-py
-        run: python -m cibuildwheel --output-dir wheelhouse
+        run: python -m cibuildwheel crates/fitdistcp-py --output-dir crates/fitdistcp-py/wheelhouse
 
       - name: Upload wheels
         uses: actions/upload-artifact@v4
