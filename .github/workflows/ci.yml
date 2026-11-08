@@ -205,7 +205,7 @@ jobs:
       - name: R testthat suite (devtools::load_all + testthat::test_dir)
         run: |
           docker run --rm -v "$PWD":/workspace -w /workspace "$IMAGE_TAG" \
-            bash -lc "cd crates/fitdistcp-r && R -e \"devtools::load_all(quiet=TRUE); testthat::test_dir('tests/testthat', stop_on_failure=TRUE)\""
+            bash -lc "bash tools/vendor-r-crate.sh && cd crates/fitdistcp-r && R -e \"devtools::load_all(quiet=TRUE); testthat::test_dir('tests/testthat', stop_on_failure=TRUE)\""
 
   # ---------------------------------------------------------------------------
   # Python: maturin develop + pytest.
