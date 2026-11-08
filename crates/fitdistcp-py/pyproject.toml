@@ -83,7 +83,12 @@ testpaths = ["tests"]
 build = "cp39-* cp310-* cp311-* cp312-* cp313-* cp314-*"
 skip = "*-musllinux_*"
 # Run the test suite against each built wheel.
-test-command = "python -c \"import fitdistcp; print(fitdistcp.__version__ if hasattr(fitdistcp, '__version__') else 'ok')\""
+#
+# DIAG: print the resolved NumPy build before importing fitdistcp. On Windows a
+# MINGW-W64 NumPy wheel (pip sometimes resolves one) crashes the interpreter on
+# import with an access violation (0xC0000005 / exit 3221225477), so we log the
+# NumPy version + file path to confirm which build the test venv picked up.
+test-command = "python -c \"import sys; print('DIAG python', sys.version); import numpy; print('DIAG numpy', numpy.__version__, numpy.__file__); import fitdistcp; print(fitdistcp.__version__ if hasattr(fitdistcp, '__version__') else 'ok')\""
 # Cap numpy here too: cibuildwheel installs test-requires into the test venv,
 # and an unbounded numpy would pull a version with no manylinux2014 wheel and
 # trigger the same source-build failure (see the `dependencies` note above).
@@ -107,7 +112,15 @@ test-requires = ["pytest", "numpy<2.3"]
 # which aborts the wheel build. Installing the components up front (mirroring
 # the macOS override below) means rustup has nothing left to install at build
 # time, so the conflict never occurs.
-before-all = "echo '=== DIAG: rustup show (pre) ===' && (rustup show || true) && echo '=== DIAG: rustup toolchain list (pre) ===' && (rustup toolchain list || true) && echo '=== DIAG: which cargo-fmt (pre) ===' && (which cargo-fmt || true) && curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain 1.85.0 && rustup component add rustfmt clippy --toolchain 1.85.0 && ln -sf $HOME/.cargo/bin/cargo /usr/local/bin/cargo && ln -sf $HOME/.cargo/bin/rustc /usr/local/bin/rustc && ln -sf $HOME/.cargo/bin/rustup /usr/local/bin/rustup && echo '=== DIAG: rustup show (post) ===' && (rustup show || true) && echo '=== DIAG: rustup component list (post) ===' && (rustup component list --toolchain 1.85.0 || true)"
+# FIX (Ubuntu wheel, exit 127 "rustup: command not found"): the manylinux
+# images do not ship a Rust toolchain, and some image variants also lack `curl`
+# (or the `manylinux2014` tag now resolves to an image without it). When `curl`
+# is missing the `curl ... | sh` pipeline fails, rustup is never installed, and
+# the first unguarded `rustup` call aborts with exit 127. Make the install
+# robust: (1) install `curl`/`wget` via the image's package manager if neither
+# is present, (2) download the rustup installer with whichever downloader is
+# available, and (3) fail with a clear message if neither exists.
+before-all = "set -e; echo '=== DIAG: rustup show (pre) ===' && (rustup show || true) && echo '=== DIAG: rustup toolchain list (pre) ===' && (rustup toolchain list || true) && echo '=== DIAG: which cargo-fmt (pre) ===' && (which cargo-fmt || true) && echo '=== DIAG: which curl ===' && (which curl || true) && echo '=== DIAG: which wget ===' && (which wget || true) && echo '=== DIAG: which sh ===' && (which sh || true) && echo '=== DIAG: os-release ===' && (cat /etc/os-release || true) && echo '=== DIAG: PATH ===' && echo \"$PATH\" && if ! command -v curl >/dev/null 2>&1 && ! command -v wget >/dev/null 2>&1; then echo '=== DIAG: no curl/wget; installing ===' && (yum install -y curl || dnf install -y curl || microdnf install -y curl || apt-get update && apt-get install -y curl); fi && if command -v curl >/dev/null 2>&1; then echo '=== DIAG: downloading rustup via curl ===' && curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs -o /tmp/rustup-init.sh; elif command -v wget >/dev/null 2>&1; then echo '=== DIAG: downloading rustup via wget ===' && wget -qO /tmp/rustup-init.sh https://sh.rustup.rs; else echo 'ERROR: neither curl nor wget is available to download rustup' >&2; exit 1; fi && sh /tmp/rustup-init.sh -y --profile minimal --default-toolchain 1.85.0 --no-self-update && rustup component add rustfmt clippy --toolchain 1.85.0 && ln -sf $HOME/.cargo/bin/cargo /usr/local/bin/cargo && ln -sf $HOME/.cargo/bin/rustc /usr/local/bin/rustc && ln -sf $HOME/.cargo/bin/rustup /usr/local/bin/rustup && echo '=== DIAG: rustup show (post) ===' && (rustup show || true) && echo '=== DIAG: rustup component list (post) ===' && (rustup component list --toolchain 1.85.0 || true)"
 
 [tool.cibuildwheel.linux]
 # Default to manylinux2014 (glibc 2.17) for the broadest compatibility on
@@ -163,3 +176,13 @@ archs = ["AMD64"]
 # the toolchain is already present. cibuildwheel runs `before-all` via cmd.exe on
 # Windows, so this uses cmd-compatible syntax (no `sh`, `ln`, or `$HOME`).
 before-all = "rustup toolchain install 1.85.0 --profile minimal --no-self-update && rustup default 1.85.0"
+# FIX (Windows wheel, exit 3221225477 = 0xC0000005 access violation): the test
+# venv resolved a MINGW-W64 NumPy build, which prints
+#   "Numpy built with MINGW-W64 on Windows 64 bits is experimental ... CRASHES
+#    ARE TO BE EXPECTED"
+# and then crashes the interpreter on `import fitdistcp` (the extension links
+# NumPy). Force a standard CPython binary wheel by reinstalling NumPy with
+# `--only-binary=:all:` (which excludes the mingw build) and `--force-reinstall`
+# so the bad wheel is replaced. The DIAG lines log the resolved build so the
+# fix is verifiable in the CI log.
+before-test = "python -m pip show numpy && python -m pip list && python -m pip install --force-reinstall --only-binary=:all: \"numpy<2.3\" && python -c \"import numpy; print('DIAG numpy after fix', numpy.__version__, numpy.__file__)\""
