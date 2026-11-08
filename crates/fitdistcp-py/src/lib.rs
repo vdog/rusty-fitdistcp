@@ -298,7 +298,12 @@ fn make_se_object<'py>(
     let mut out: Vec<Py<PyAny>> = Vec::with_capacity(lddi_diag.len());
     for &d in lddi_diag {
         if d > 0.0 {
-            out.push("square root not possible".into_pyobject(py)?.unbind().into());
+            out.push(
+                "square root not possible"
+                    .into_pyobject(py)?
+                    .unbind()
+                    .into(),
+            );
         } else {
             let v = (-d / nx).sqrt();
             out.push(v.into_pyobject(py)?.unbind().into());
@@ -341,7 +346,9 @@ fn rvs_uniform_probs(py: Python<'_>, n: usize) -> PyResult<Vec<f64>> {
     let np = py.import("numpy")?;
     let kwargs = PyDict::new(py);
     kwargs.set_item("size", n)?;
-    let arr = np.getattr("random")?.call_method("uniform", (), Some(&kwargs))?;
+    let arr = np
+        .getattr("random")?
+        .call_method("uniform", (), Some(&kwargs))?;
     let arr: Vec<f64> = arr.extract()?;
     Ok(arr)
 }
@@ -1093,7 +1100,18 @@ fn ppf_gamma_ref<'py>(
     prior: &str,
     aderivs: bool,
 ) -> PyResult<Bound<'py, PyDict>> {
-    let _ = (fd1, fd2, means, waicscores, logscores, dmgs, ru, ru_nsamples, prior, aderivs);
+    let _ = (
+        fd1,
+        fd2,
+        means,
+        waicscores,
+        logscores,
+        dmgs,
+        ru,
+        ru_nsamples,
+        prior,
+        aderivs,
+    );
     let x = x.as_slice()?.to_vec();
     let p = p.as_slice()?.to_vec();
     let req = make_request(x.clone(), x.clone(), p, None, None, None, None);
@@ -1195,7 +1213,17 @@ fn ppf_genextreme_ref<'py>(
     ru: bool,
     ru_nsamples: usize,
 ) -> PyResult<Bound<'py, PyDict>> {
-    let _ = (ics, means, waicscores, extramodels, pdf, customprior, dmgs, ru, ru_nsamples);
+    let _ = (
+        ics,
+        means,
+        waicscores,
+        extramodels,
+        pdf,
+        customprior,
+        dmgs,
+        ru,
+        ru_nsamples,
+    );
     let x = x.as_slice()?.to_vec();
     let p = p.as_slice()?.to_vec();
     let req = make_request(x.clone(), x.clone(), p, None, None, None, None);
@@ -1206,7 +1234,10 @@ fn ppf_genextreme_ref<'py>(
     d.set_item("pw_params", PWM_NOT_SELECTED)?;
     d.set_item("pw_quantiles", PWM_NOT_SELECTED)?;
     d.set_item("custom_quantiles", EXTRAMODELS_NOT_SELECTED)?;
-    d.set_item("ml_max", GenExtreme.ml_max(r.ml_params[0], r.ml_params[1], shape))?;
+    d.set_item(
+        "ml_max",
+        GenExtreme.ml_max(r.ml_params[0], r.ml_params[1], shape),
+    )?;
     d.set_item("revert2ml", GenExtreme.revert2ml(shape))?;
     put_arr(py, &d, "ml_pdf", r.ml_pdf.clone())?;
     put_arr(py, &d, "cp_pdf", r.cp_pdf.clone())?;
@@ -1313,7 +1344,21 @@ fn ppf_genpareto_ref<'py>(
     ru: bool,
     ru_nsamples: usize,
 ) -> PyResult<Bound<'py, PyDict>> {
-    let _ = (kloc, ics, fdalpha, customprior, minxi, maxxi, means, waicscores, extramodels, pdf, dmgs, ru, ru_nsamples);
+    let _ = (
+        kloc,
+        ics,
+        fdalpha,
+        customprior,
+        minxi,
+        maxxi,
+        means,
+        waicscores,
+        extramodels,
+        pdf,
+        dmgs,
+        ru,
+        ru_nsamples,
+    );
     let x = x.as_slice()?.to_vec();
     let p = p.as_slice()?.to_vec();
     let req = make_request(x.clone(), x.clone(), p, None, None, None, None);
@@ -1458,7 +1503,20 @@ fn ppf_genextreme_p1_ref<'py>(
     predictordata: bool,
     centering: bool,
 ) -> PyResult<Bound<'py, PyDict>> {
-    let _ = (ics, minxi, maxxi, means, waicscores, extramodels, pdf, dmgs, ru, ru_nsamples, predictordata, centering);
+    let _ = (
+        ics,
+        minxi,
+        maxxi,
+        means,
+        waicscores,
+        extramodels,
+        pdf,
+        dmgs,
+        ru,
+        ru_nsamples,
+        predictordata,
+        centering,
+    );
     let x = x.as_slice()?.to_vec();
     let t = t.as_slice()?.to_vec();
     let p = match p {
@@ -1481,11 +1539,7 @@ fn ppf_genextreme_p1_ref<'py>(
     let a = r.ml_params[0];
     let b = r.ml_params[1];
     let sigma = r.ml_params[2];
-    let predictedparameter: Vec<f64> = model
-        .t
-        .iter()
-        .map(|&ti| a + b * (ti - mean_t))
-        .collect();
+    let predictedparameter: Vec<f64> = model.t.iter().map(|&ti| a + b * (ti - mean_t)).collect();
     let adjustedx: Vec<f64> = x
         .iter()
         .enumerate()
@@ -1497,7 +1551,10 @@ fn ppf_genextreme_p1_ref<'py>(
     put_arr(py, &d, "predictedparameter", predictedparameter)?;
     put_arr(py, &d, "adjustedx", adjustedx)?;
     d.set_item("revert2ml", model.revert2ml(shape))?;
-    d.set_item("ml_max", model.ml_max(r.ml_params[0], r.ml_params[2], shape))?;
+    d.set_item(
+        "ml_max",
+        model.ml_max(r.ml_params[0], r.ml_params[2], shape),
+    )?;
     put_arr(py, &d, "ml_pdf", r.ml_pdf.clone())?;
     put_arr(py, &d, "cp_pdf", r.cp_pdf.clone())?;
     Ok(d)
@@ -1526,7 +1583,18 @@ fn pdf_genextreme_p1_ref<'py>(
     predictordata: bool,
     centering: bool,
 ) -> PyResult<Bound<'py, PyDict>> {
-    let _ = (ics, minxi, maxxi, extramodels, pdf, dmgs, ru, ru_nsamples, predictordata, centering);
+    let _ = (
+        ics,
+        minxi,
+        maxxi,
+        extramodels,
+        pdf,
+        dmgs,
+        ru,
+        ru_nsamples,
+        predictordata,
+        centering,
+    );
     let x = x.as_slice()?.to_vec();
     let t = t.as_slice()?.to_vec();
     let y = match y {
@@ -1569,7 +1637,17 @@ fn cdf_genextreme_p1_ref<'py>(
     predictordata: bool,
     centering: bool,
 ) -> PyResult<Bound<'py, PyDict>> {
-    let _ = (ics, minxi, maxxi, extramodels, dmgs, ru, ru_nsamples, predictordata, centering);
+    let _ = (
+        ics,
+        minxi,
+        maxxi,
+        extramodels,
+        dmgs,
+        ru,
+        ru_nsamples,
+        predictordata,
+        centering,
+    );
     let x = x.as_slice()?.to_vec();
     let t = t.as_slice()?.to_vec();
     let y = match y {

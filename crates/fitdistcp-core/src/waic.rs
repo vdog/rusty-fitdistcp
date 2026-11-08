@@ -161,8 +161,8 @@ pub fn make_waic<M: DmgsModel + Copy + Sync>(
             t1v[j * nx + i] = 2.0 * lfhatxof[i] * f1f[j * nx + i];
         }
         for jk in 0..dim * dim {
-            let t2inner = f2f[jk * nx + i] * lfhatx[i]
-                + outerf1f[jk * nx + i] * omlfhatx[i] / fhatx[i];
+            let t2inner =
+                f2f[jk * nx + i] * lfhatx[i] + outerf1f[jk * nx + i] * omlfhatx[i] / fhatx[i];
             t2v[jk * nx + i] = 2.0 * t2inner / fhatx[i];
         }
     }

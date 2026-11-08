@@ -678,7 +678,11 @@ mod tests {
         };
         let r = predict_gev(GenExtreme, &req, &[1.4, 0.3, -0.1], 0.01);
         assert!(r.ml_mean.is_finite(), "ml_mean {}", r.ml_mean);
-        assert!(r.cp_mean.is_infinite() && r.cp_mean > 0.0, "cp_mean {}", r.cp_mean);
+        assert!(
+            r.cp_mean.is_infinite() && r.cp_mean > 0.0,
+            "cp_mean {}",
+            r.cp_mean
+        );
     }
 
     #[test]

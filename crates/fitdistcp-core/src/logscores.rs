@@ -50,11 +50,7 @@ pub struct LogScores {
 /// # Panics
 ///
 /// Panics if `init.len() != model.n_params()` or if `x` is empty.
-pub fn logscores<M: DmgsModel + Copy + Sync>(
-    model: M,
-    x: &[f64],
-    init: &[f64],
-) -> LogScores {
+pub fn logscores<M: DmgsModel + Copy + Sync>(model: M, x: &[f64], init: &[f64]) -> LogScores {
     let nx = x.len();
     assert!(nx > 0, "logscores: x must be non-empty");
     let eps = f64::EPSILON;

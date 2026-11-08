@@ -358,11 +358,7 @@ impl DmgsModel for NormalP1 {
     fn mean_derivs(&self, params: &[f64]) -> (f64, Vec<f64>, Vec<f64>) {
         let t = self.centered_prediction();
         let muhat0 = params[0] + params[1] * t;
-        (
-            muhat0,
-            vec![1.0, t, 0.0],
-            vec![0.0; 9],
-        )
+        (muhat0, vec![1.0, t, 0.0], vec![0.0; 9])
     }
 }
 
@@ -612,8 +608,8 @@ impl DmgsModel for GenExtreme {
             let d12 = (1.0 - g0 - xi * g1) / (xi * xi);
             meand2[5] = d12; // (1, 2)
             meand2[7] = d12; // (2, 1)
-            meand2[8] = sigma * (-2.0 + 2.0 * g0 + 2.0 * xi * g1 + xi * xi * g2)
-                / (xi * xi * xi); // (2, 2)
+            meand2[8] = sigma * (-2.0 + 2.0 * g0 + 2.0 * xi * g1 + xi * xi * g2) / (xi * xi * xi);
+            // (2, 2)
         }
         (ml_mean, meand1, meand2)
     }
@@ -699,8 +695,8 @@ impl DmgsModel for GenExtremeP1 {
             let d23 = (1.0 - g0 - xi * g1) / (xi * xi);
             meand2[11] = d23; // (2, 3)
             meand2[14] = d23; // (3, 2)
-            meand2[15] = sigma * (-2.0 + 2.0 * g0 + 2.0 * xi * g1 + xi * xi * g2)
-                / (xi * xi * xi); // (3, 3)
+            meand2[15] = sigma * (-2.0 + 2.0 * g0 + 2.0 * xi * g1 + xi * xi * g2) / (xi * xi * xi);
+            // (3, 3)
         }
         (ml_mean, meand1, meand2)
     }

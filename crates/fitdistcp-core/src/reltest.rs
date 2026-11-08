@@ -164,7 +164,15 @@ pub fn reltest(
     true_params: &[f64],
     init: &[f64],
 ) -> RelTestResult {
-    reltest_seeded(model, ntrials, nx, p, true_params, init, DEFAULT_RELTEST_SEED)
+    reltest_seeded(
+        model,
+        ntrials,
+        nx,
+        p,
+        true_params,
+        init,
+        DEFAULT_RELTEST_SEED,
+    )
 }
 
 /// The true-model quantile `F^{-1}(u; params)` for the given model.
@@ -222,7 +230,10 @@ mod tests {
         assert_eq!(r.actual_p_cp.len(), p.len());
         assert_eq!(r.p, p);
         for v in r.actual_p_ml.iter().chain(r.actual_p_cp.iter()) {
-            assert!(v.is_finite() && (0.0..=1.0).contains(v), "p out of range: {v}");
+            assert!(
+                v.is_finite() && (0.0..=1.0).contains(v),
+                "p out of range: {v}"
+            );
         }
     }
 
