@@ -1,5 +1,8 @@
 # fitdistcp — Rust Port
 
+[![CI](https://github.com/vdog/rusty-fitdistcp/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/vdog/rusty-fitdistcp/actions/workflows/ci.yml)
+[![Release](https://github.com/vdog/rusty-fitdistcp/actions/workflows/release.yml/badge.svg?branch=main)](https://github.com/vdog/rusty-fitdistcp/actions/workflows/release.yml)
+
 A Rust reimplementation of the R/Python package `fitdistcp` (calibrating prior
 prediction), with thin R (extendr) and Python (PyO3) bindings over one shared,
 binding-agnostic numerics core.

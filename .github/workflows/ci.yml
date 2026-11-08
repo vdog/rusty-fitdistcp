@@ -16,6 +16,15 @@
 # Every command below was verified locally inside the dev container with:
 #   docker compose run --rm dev <command>
 # See the job comments for the exact local equivalents.
+#
+# Trigger behavior (docs-only filtering):
+#   The workflow always triggers on push/PR (no `paths-ignore`). A lightweight
+#   `changes` job (dorny/paths-filter) detects whether any *source* files changed
+#   (crates/**, Cargo.toml, Cargo.lock, rust-toolchain.toml, Dockerfile,
+#   docker-compose.yml, .github/workflows/**, tools/**, tests/**). When only
+#   docs change, the heavy jobs (`build-image` and its dependents `rust`, `r`,
+#   `python`) are skipped, and the `docs-only` job runs instead and reports
+#   green — so required status checks still pass on docs-only PRs.
 
 name: CI
 
@@ -44,11 +53,53 @@ env:
 
 jobs:
   # ---------------------------------------------------------------------------
+  # Detect whether any *source* files changed. This is the gate for the heavy
+  # build/test jobs: when only docs change, `source` is 'false' and the heavy
+  # jobs are skipped (see `docs-only` below).
+  # ---------------------------------------------------------------------------
+  changes:
+    name: Detect source changes
+    runs-on: ubuntu-latest
+    outputs:
+      source: ${{ steps.filter.outputs.source }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            source:
+              - "crates/**"
+              - "Cargo.toml"
+              - "Cargo.lock"
+              - "rust-toolchain.toml"
+              - "Dockerfile"
+              - "docker-compose.yml"
+              - ".github/workflows/**"
+              - "tools/**"
+              - "tests/**"
+
+  # ---------------------------------------------------------------------------
+  # Docs-only path: no source changed, so the heavy jobs are skipped. This job
+  # runs instead and reports green so required status checks still pass on
+  # docs-only PRs.
+  # ---------------------------------------------------------------------------
+  docs-only:
+    name: Docs-only (no source changes)
+    needs: changes
+    if: needs.changes.outputs.source != 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "No source changes; skipping build/test jobs."
+
+  # ---------------------------------------------------------------------------
   # Build the dev image once and export it as an artifact so the test jobs do
   # not each rebuild it. This is the "reuse the Docker image" requirement.
   # ---------------------------------------------------------------------------
   build-image:
     name: Build dev Docker image
+    needs: changes
+    if: needs.changes.outputs.source == 'true'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
