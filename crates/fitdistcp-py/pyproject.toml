@@ -96,7 +96,18 @@ test-requires = ["pytest", "numpy<2.3"]
 # small; `-y` makes the installer non-interactive. The binaries are then
 # symlinked into /usr/local/bin so later build steps (which do not inherit
 # before-all's environment) can find `cargo`.
-before-all = "curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain 1.85.0 && ln -sf $HOME/.cargo/bin/cargo /usr/local/bin/cargo && ln -sf $HOME/.cargo/bin/rustc /usr/local/bin/rustc && ln -sf $HOME/.cargo/bin/rustup /usr/local/bin/rustup"
+#
+# IMPORTANT: rust-toolchain.toml declares `components = ["rustfmt", "clippy"]`.
+# If those components are absent, rustup tries to install them LAZILY the first
+# time `cargo` runs (e.g. when maturin invokes `cargo metadata`). On the
+# manylinux images that lazy install collides with a pre-existing `cargo-fmt`
+# binary and rolls back:
+#   error: failed to install component: 'rustfmt-preview-...',
+#          detected conflict: 'bin/cargo-fmt'
+# which aborts the wheel build. Installing the components up front (mirroring
+# the macOS override below) means rustup has nothing left to install at build
+# time, so the conflict never occurs.
+before-all = "echo '=== DIAG: rustup show (pre) ===' && (rustup show || true) && echo '=== DIAG: rustup toolchain list (pre) ===' && (rustup toolchain list || true) && echo '=== DIAG: which cargo-fmt (pre) ===' && (which cargo-fmt || true) && curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain 1.85.0 && rustup component add rustfmt clippy --toolchain 1.85.0 && ln -sf $HOME/.cargo/bin/cargo /usr/local/bin/cargo && ln -sf $HOME/.cargo/bin/rustc /usr/local/bin/rustc && ln -sf $HOME/.cargo/bin/rustup /usr/local/bin/rustup && echo '=== DIAG: rustup show (post) ===' && (rustup show || true) && echo '=== DIAG: rustup component list (post) ===' && (rustup component list --toolchain 1.85.0 || true)"
 
 [tool.cibuildwheel.linux]
 # Default to manylinux2014 (glibc 2.17) for the broadest compatibility on
