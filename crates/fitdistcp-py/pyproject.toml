@@ -26,14 +26,31 @@ classifiers = [
     "Programming Language :: Python :: 3.14",
     "Topic :: Scientific/Engineering :: Mathematics",
 ]
-# Upper bound: NumPy 2.3.0 dropped manylinux2014 (glibc 2.17) wheels, so on the
-# manylinux2014 cibuildwheel images pip would fall back to building NumPy from
-# source — which fails because the image's GCC 10.2.1 is below NumPy's required
-# GCC >= 10.3 ("NumPy requires GCC >= 10.3"). Capping at <2.3 keeps NumPy 2.2.6
-# (the last release with a manylinux2014 cp312 wheel) as the resolved version on
-# the glibc-2.17 images, while newer NumPy remains available on platforms that
-# ship wheels (macOS/Windows/manylinux_2_28).
-dependencies = ["numpy>=1.22,<2.3"]
+# NumPy constraint is PER-PYTHON-VERSION because two platform constraints
+# conflict and cannot both be satisfied by a single global bound:
+#
+#   * CPython 3.9–3.13 on the manylinux2014 (glibc 2.17) cibuildwheel images:
+#     NumPy 2.3.0 dropped manylinux2014 wheels, so pip would fall back to
+#     building NumPy from source — which fails because the image's GCC 10.2.1 is
+#     below NumPy's required GCC >= 10.3 ("NumPy requires GCC >= 10.3"). Cap at
+#     <2.3 to keep NumPy 2.2.6 (the last release with a manylinux2014 cp312
+#     wheel) resolvable on the glibc-2.17 images.
+#
+#   * CPython 3.14 (any platform): NumPy 2.2.6 ships NO cp314 wheel at all
+#     (win_amd64 wheels exist only for cp310–cp313). With the global <2.3 cap,
+#     the cp314-win_amd64 test venv fell back to the NumPy sdist and built it
+#     from source with MINGW-W64, which prints
+#       "Numpy built with MINGW-W64 on Windows 64 bits is experimental ...
+#        CRASHES ARE TO BE EXPECTED"
+#     and then segfaults the interpreter on `import numpy` with an access
+#     violation (0xC0000005 / exit 3221225477). The first NumPy release with a
+#     cp314 win_amd64 wheel is 2.3.2, so require >=2.3.2 on 3.14.
+#
+# The markers below express exactly that: <2.3 on 3.9–3.13, >=2.3.2 on 3.14+.
+dependencies = [
+    "numpy>=1.22,<2.3; python_version < '3.14'",
+    "numpy>=2.3.2; python_version >= '3.14'",
+]
 
 [project.urls]
 Repository = "https://github.com/stephenjewson/fitdistcp"
@@ -84,15 +101,21 @@ build = "cp39-* cp310-* cp311-* cp312-* cp313-* cp314-*"
 skip = "*-musllinux_*"
 # Run the test suite against each built wheel.
 #
-# DIAG: print the resolved NumPy build before importing fitdistcp. On Windows a
-# MINGW-W64 NumPy wheel (pip sometimes resolves one) crashes the interpreter on
-# import with an access violation (0xC0000005 / exit 3221225477), so we log the
-# NumPy version + file path to confirm which build the test venv picked up.
+# DIAG: print the resolved NumPy build before importing fitdistcp. A NumPy built
+# from source with MINGW-W64 on Windows crashes the interpreter on import with
+# an access violation (0xC0000005 / exit 3221225477), so we log the NumPy
+# version + file path to confirm which build the test venv picked up.
 test-command = "python -c \"import sys; print('DIAG python', sys.version); import numpy; print('DIAG numpy', numpy.__version__, numpy.__file__); import fitdistcp; print(fitdistcp.__version__ if hasattr(fitdistcp, '__version__') else 'ok')\""
-# Cap numpy here too: cibuildwheel installs test-requires into the test venv,
-# and an unbounded numpy would pull a version with no manylinux2014 wheel and
-# trigger the same source-build failure (see the `dependencies` note above).
-test-requires = ["pytest", "numpy<2.3"]
+# Match the per-Python-version NumPy constraint from `dependencies` above:
+# cibuildwheel installs test-requires into the test venv, so an unbounded numpy
+# would pull a version with no manylinux2014 wheel (source-build failure on the
+# glibc-2.17 images) while a global <2.3 cap would force a source build on cp314
+# (no cp314 wheel exists before 2.3.2). Keep the two markers in sync.
+test-requires = [
+    "pytest",
+    "numpy>=1.22,<2.3; python_version < '3.14'",
+    "numpy>=2.3.2; python_version >= '3.14'",
+]
 # Build the wheel from the crate directory (the Cargo workspace root is one
 # level up; maturin resolves the workspace automatically).
 #
@@ -185,19 +208,18 @@ archs = ["AMD64"]
 # the toolchain is already present. cibuildwheel runs `before-all` via cmd.exe on
 # Windows, so this uses cmd-compatible syntax (no `sh`, `ln`, or `$HOME`).
 before-all = "rustup toolchain install 1.85.0 --profile minimal --no-self-update && rustup default 1.85.0"
-# FIX (Windows wheel, exit 3221225477 = 0xC0000005 access violation): the test
-# venv resolved a MINGW-W64 NumPy build, which prints
+# FIX (Windows wheel, exit 3221225477 = 0xC0000005 access violation): the
+# cp314-win_amd64 test venv resolved NumPy 2.2.6, which ships NO cp314 wheel, so
+# pip built NumPy from source with MINGW-W64. That build prints
 #   "Numpy built with MINGW-W64 on Windows 64 bits is experimental ... CRASHES
 #    ARE TO BE EXPECTED"
-# and then crashes the interpreter on `import fitdistcp` (the extension links
-# NumPy).
+# and then segfaults the interpreter on `import numpy` (the extension links
+# NumPy), aborting the test command.
 #
-# FIX (SECOND cause): the previous fix used `--only-binary=:all:`, but that flag
-# only forbids SOURCE builds — it does NOT exclude the MINGW-W64 wheel, which is
-# itself a binary wheel on PyPI. So pip happily reinstalled the crashing mingw
-# build and the access violation persisted. Force the standard CPython
-# `win_amd64` wheel instead by (1) pinning an exact NumPy version that ships a
-# CPython win_amd64 wheel, (2) `--no-cache-dir` so the cached mingw wheel cannot
-# be reused, and (3) `--force-reinstall` so the bad wheel is replaced. The DIAG
-# lines log the resolved build so the fix is verifiable in the CI log.
-before-test = "python -m pip show numpy || true; python -m pip list || true; python -m pip install --force-reinstall --no-cache-dir --only-binary=:all: \"numpy==2.2.6\" && python -c \"import numpy; print('DIAG numpy after fix', numpy.__version__, numpy.__file__)\""
+# The real fix is the per-Python-version NumPy constraint in `dependencies` /
+# `test-requires` above: on 3.14 it now requires NumPy >=2.3.2, the first release
+# with a cp314 win_amd64 wheel, so pip installs a prebuilt wheel instead of
+# compiling the sdist. A `before-test` pip reinstall was tried previously but
+# could not work: `--only-binary=:all:` only forbids SOURCE builds and does not
+# exclude the MINGW-W64 wheel, and no cp314 binary of 2.2.6 exists to install in
+# the first place. It has been removed in favour of the constraint above.
