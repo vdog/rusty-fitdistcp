@@ -26,7 +26,14 @@ classifiers = [
     "Programming Language :: Python :: 3.14",
     "Topic :: Scientific/Engineering :: Mathematics",
 ]
-dependencies = ["numpy>=1.22"]
+# Upper bound: NumPy 2.3.0 dropped manylinux2014 (glibc 2.17) wheels, so on the
+# manylinux2014 cibuildwheel images pip would fall back to building NumPy from
+# source — which fails because the image's GCC 10.2.1 is below NumPy's required
+# GCC >= 10.3 ("NumPy requires GCC >= 10.3"). Capping at <2.3 keeps NumPy 2.2.6
+# (the last release with a manylinux2014 cp312 wheel) as the resolved version on
+# the glibc-2.17 images, while newer NumPy remains available on platforms that
+# ship wheels (macOS/Windows/manylinux_2_28).
+dependencies = ["numpy>=1.22,<2.3"]
 
 [project.urls]
 Repository = "https://github.com/stephenjewson/fitdistcp"
@@ -77,7 +84,10 @@ build = "cp39-* cp310-* cp311-* cp312-* cp313-* cp314-*"
 skip = "*-musllinux_*"
 # Run the test suite against each built wheel.
 test-command = "python -c \"import fitdistcp; print(fitdistcp.__version__ if hasattr(fitdistcp, '__version__') else 'ok')\""
-test-requires = ["pytest", "numpy"]
+# Cap numpy here too: cibuildwheel installs test-requires into the test venv,
+# and an unbounded numpy would pull a version with no manylinux2014 wheel and
+# trigger the same source-build failure (see the `dependencies` note above).
+test-requires = ["pytest", "numpy<2.3"]
 # Build the wheel from the crate directory (the Cargo workspace root is one
 # level up; maturin resolves the workspace automatically).
 #
