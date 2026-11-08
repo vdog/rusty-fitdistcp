@@ -59,8 +59,16 @@ testpaths = ["tests"]
 #   docker compose run --rm dev bash -lc "cd crates/fitdistcp-py && \
 #     CIBW_BUILD='cp39-*' cibuildwheel --platform linux"
 #
-# The Rust toolchain is provided by the cibuildwheel manylinux images (they
-# ship rustup); macOS/Windows runners install it via the workflow.
+# The cibuildwheel manylinux images do NOT ship a Rust toolchain (verified:
+# neither `rustup` nor `cargo` is on PATH in manylinux2014 / manylinux_2_28),
+# so `before-all` installs rustup + the pinned toolchain itself. The toolchain
+# version matches rust-toolchain.toml (1.85.0) so local, CI, and wheel builds
+# all use the same compiler.
+#
+# IMPORTANT: cibuildwheel does NOT add $HOME/.cargo/bin to PATH on Linux, and
+# environment changes made by `before-all` do not persist to later steps. So
+# after installing we symlink the toolchain binaries into /usr/local/bin (which
+# is already on the default PATH) — otherwise maturin cannot find `cargo`.
 # ---------------------------------------------------------------------------
 [tool.cibuildwheel]
 # Build for CPython 3.9–3.14 on all platforms. 3.14 is included because
@@ -72,7 +80,13 @@ test-command = "python -c \"import fitdistcp; print(fitdistcp.__version__ if has
 test-requires = ["pytest", "numpy"]
 # Build the wheel from the crate directory (the Cargo workspace root is one
 # level up; maturin resolves the workspace automatically).
-before-all = "rustup default stable"
+#
+# Install Rust via rustup (the manylinux images ship no toolchain) and pin it
+# to 1.85.0 to match rust-toolchain.toml. `--profile minimal` keeps the image
+# small; `-y` makes the installer non-interactive. The binaries are then
+# symlinked into /usr/local/bin so later build steps (which do not inherit
+# before-all's environment) can find `cargo`.
+before-all = "curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain 1.85.0 && ln -sf $HOME/.cargo/bin/cargo /usr/local/bin/cargo && ln -sf $HOME/.cargo/bin/rustc /usr/local/bin/rustc && ln -sf $HOME/.cargo/bin/rustup /usr/local/bin/rustup"
 
 [tool.cibuildwheel.linux]
 # Default to manylinux2014 (glibc 2.17) for the broadest compatibility on
@@ -95,6 +109,15 @@ manylinux-aarch64-image = "manylinux_2_28"
 [tool.cibuildwheel.macos]
 # Build for both Intel and Apple Silicon.
 archs = ["x86_64", "arm64"]
+# The macOS runners are Apple Silicon (arm64), so building the x86_64 wheel is a
+# CROSS-compilation. The pinned toolchain (1.85.0, from rust-toolchain.toml) is
+# installed with only the host (aarch64-apple-darwin) std, so `cargo` cannot find
+# `core` for the x86_64-apple-darwin target:
+#   error[E0463]: can't find crate for `core`
+#     = note: the `x86_64-apple-darwin` target may not be installed
+# Install the pinned toolchain AND add the x86_64 target so both arches build.
+# (The generic `before-all` above only installs the host toolchain.)
+before-all = "curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain 1.85.0 && rustup target add x86_64-apple-darwin --toolchain 1.85.0"
 
 [tool.cibuildwheel.windows]
 archs = ["AMD64"]
