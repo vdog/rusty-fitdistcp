@@ -199,6 +199,15 @@ Performance optimizations have been applied (up to **16×** on mixed
 derivatives, **2.1×** on gamma/GEV quantiles) with no tolerance regression; the
 before/after numbers are recorded in `HOT_LOOPS.md`.
 
+A cross-language execution-time comparison of the Rust port vs the reference R
+package vs the Python module is committed in
+[`crates/fitdistcp-core/benches/perf_comparison_results.md`](crates/fitdistcp-core/benches/perf_comparison_results.md)
+(with a machine-readable
+[`perf_comparison_results.csv`](crates/fitdistcp-core/benches/perf_comparison_results.csv));
+the workload and methodology are defined in
+[`PERF_COMPARISON.md`](crates/fitdistcp-core/benches/PERF_COMPARISON.md).
+Regenerate it with [`tools/run-perf-comparison.sh`](tools/run-perf-comparison.sh).
+
 ## Golden fixtures & tolerance policy
 
 The committed fixtures in [`tests/golden/`](tests/golden/) are generated from

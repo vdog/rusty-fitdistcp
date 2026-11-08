@@ -59,4 +59,13 @@ build/
 
 # W7 golden-fixture tooling: cloned reference package + generation scripts.
 # The generated fixtures themselves live in tests/golden/ and ARE committed.
-/tools/
+# The harness scripts under tools/ (e.g. run-perf-comparison.sh,
+# bench/aggregate_perf.py, bench/bench_ref_r.R, bench/bench_ref_py.py) ARE
+# committed, so only the vendored clones / installed deps / generated output
+# below are ignored.
+tools/fitdistcp-ref/
+tools/fitdistcp-py-ref/
+tools/Rlib/
+tools/pylib/
+tools/bench/out/
+tools/bench/__pycache__/

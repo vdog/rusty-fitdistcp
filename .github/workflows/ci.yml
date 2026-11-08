@@ -23,6 +23,9 @@ on:
   push:
     branches: ["**"]
   pull_request:
+  # Manual-only trigger for the heavy cross-language perf comparison (see the
+  # `perf-comparison` job). It is intentionally NOT run on push/PR.
+  workflow_dispatch:
 
 # Cancel superseded runs on the same ref to save runner minutes.
 concurrency:
@@ -150,11 +153,22 @@ jobs:
             bash -lc "${{ steps.tc.outputs.cargo }} fmt --check"
 
       # Compile-check the criterion benches (a full `cargo bench` run is too
-      # slow for PR CI; W16 owns the benchmark baselines).
+      # slow for PR CI; W16 owns the benchmark baselines). This covers the
+      # `cross_language` bench target (registered in fitdistcp-core/Cargo.toml).
       - name: cargo bench --workspace --no-run
         run: |
           docker run --rm -v "$PWD":/workspace -w /workspace "$IMAGE_TAG" \
             bash -lc "${{ steps.tc.outputs.cargo }} bench --workspace --no-run"
+
+      # Compile-check the binaries. `cargo bench --no-run` does NOT build
+      # `src/bin/` targets, so the cross-language `perf_timing` CSV binary
+      # (crates/fitdistcp-core/src/bin/perf_timing.rs) needs its own check.
+      # A full cross-language perf run is intentionally NOT part of PR CI
+      # (too heavy); see the manual `perf-comparison` workflow_dispatch job.
+      - name: cargo check -p fitdistcp-core --benches --bins
+        run: |
+          docker run --rm -v "$PWD":/workspace -w /workspace "$IMAGE_TAG" \
+            bash -lc "${{ steps.tc.outputs.cargo }} check -p fitdistcp-core --benches --bins"
 
   # ---------------------------------------------------------------------------
   # R: testthat suite via the documented `devtools::load_all` workflow.
@@ -222,3 +236,50 @@ jobs:
         run: |
           docker run --rm -v "$PWD":/workspace -w /workspace "$IMAGE_TAG" \
             bash -lc "cd crates/fitdistcp-py && python3 -m venv .venv && . .venv/bin/activate && pip install --quiet numpy pytest && maturin develop --quiet && pytest -q"
+
+  # ---------------------------------------------------------------------------
+  # Cross-language performance comparison (manual only).
+  #
+  # This is the FULL comparison run (Rust + reference R + Python harnesses +
+  # aggregation). It is far too heavy for push/PR CI, so it is gated behind
+  # `workflow_dispatch` and never runs automatically. The PR `rust` job only
+  # compile-checks the bench target and the `perf_timing` binary.
+  #
+  # Local equivalent:
+  #   docker compose run --rm dev bash tools/run-perf-comparison.sh
+  #
+  # It regenerates the committed results files:
+  #   crates/fitdistcp-core/benches/perf_comparison_results.md
+  #   crates/fitdistcp-core/benches/perf_comparison_results.csv
+  # ---------------------------------------------------------------------------
+  perf-comparison:
+    name: Cross-language perf comparison (manual)
+    if: github.event_name == 'workflow_dispatch'
+    needs: build-image
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download dev image
+        uses: actions/download-artifact@v4
+        with:
+          name: fitdistcp-dev-image
+          path: /tmp
+
+      - name: Load dev image
+        run: docker load -i /tmp/fitdistcp-dev.tar
+
+      - name: Run cross-language perf comparison
+        run: |
+          docker run --rm -v "$PWD":/workspace -w /workspace "$IMAGE_TAG" \
+            bash -lc "bash tools/run-perf-comparison.sh"
+
+      - name: Upload results
+        uses: actions/upload-artifact@v4
+        with:
+          name: perf-comparison-results
+          path: |
+            crates/fitdistcp-core/benches/perf_comparison_results.md
+            crates/fitdistcp-core/benches/perf_comparison_results.csv
+          retention-days: 14

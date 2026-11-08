@@ -22,6 +22,12 @@ statrs = { workspace = true }
 nalgebra = { workspace = true }
 argmin = { workspace = true }
 rayon = { workspace = true }
+# Cross-language benchmark (Group B): the shared input fixture
+# `benches/perf_inputs.json` is parsed with serde_json. This is a *normal*
+# dependency (not dev-only) because the `perf_timing` binary under `src/bin/`
+# also reads the fixture, and dev-dependencies are not available to binaries.
+serde = { workspace = true }
+serde_json = { workspace = true }
 
 [dev-dependencies]
 # W16: Criterion benchmarks for the performance-critical paths (§6). These are
@@ -44,4 +50,11 @@ harness = false
 
 [[bench]]
 name = "mle_fitting"
+harness = false
+
+# Cross-language performance comparison (Group A). The workload spec lives in
+# `benches/PERF_COMPARISON.md` and the shared inputs in `benches/perf_inputs.json`.
+# `harness = false` keeps it out of `cargo test`, matching the other bench targets.
+[[bench]]
+name = "cross_language"
 harness = false
