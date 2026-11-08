@@ -56,6 +56,10 @@ for pat, rep in subs.items():
     text = re.sub(pat, rep, text, flags=re.M)
 
 # Replace `{ workspace = true }` dependency specs with explicit versions.
+# NOTE: every dependency declared as `{ workspace = true }` in the core crate
+# MUST appear here, otherwise the standalone vendored manifest keeps the
+# `workspace = true` inheritance and `cargo vendor` fails with
+# "`workspace.dependencies` was not defined".
 dep_versions = {
     'special': '0.11',
     'statrs': '0.17',
@@ -65,12 +69,20 @@ dep_versions = {
     'criterion': '0.5',
     'rand': '0.8',
     'rand_distr': '0.4',
+    'serde_json': '1',
 }
 for name, ver in dep_versions.items():
     text = re.sub(
         r'^' + re.escape(name) + r'\s*=\s*\{\s*workspace\s*=\s*true\s*\}',
         f'{name} = "{ver}"',
         text, flags=re.M)
+
+# `serde` is declared in the workspace with `features = ["derive"]`, so the
+# rewrite must preserve that feature (the core crate relies on the derive macro).
+text = re.sub(
+    r'^serde\s*=\s*\{\s*workspace\s*=\s*true\s*\}',
+    'serde = { version = "1", features = ["derive"] }',
+    text, flags=re.M)
 
 # Drop the [dev-dependencies] section and the [[bench]] targets: they are not
 # needed to build the R package and would pull criterion/rand into the vendor

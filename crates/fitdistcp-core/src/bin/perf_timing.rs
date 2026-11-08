@@ -725,13 +725,7 @@ fn main() {
         writeln!(
             out,
             "rust,{},{},{},{},{},{},{}",
-            row.model,
-            row.operation,
-            row.n,
-            row.median_ns,
-            row.min_ns,
-            row.max_ns,
-            row.repeats
+            row.model, row.operation, row.n, row.median_ns, row.min_ns, row.max_ns, row.repeats
         )
         .expect("write row");
     }
