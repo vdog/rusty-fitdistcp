@@ -78,14 +78,6 @@ skip = "*-musllinux_*"
 # Run the test suite against each built wheel.
 test-command = "python -c \"import fitdistcp; print(fitdistcp.__version__ if hasattr(fitdistcp, '__version__') else 'ok')\""
 test-requires = ["pytest", "numpy"]
-# Constrain the test venv's numpy. The wheel declares `numpy>=1.22`, but on the
-# manylinux2014 (glibc 2.17) test image an unconstrained resolve picks a numpy
-# that no longer ships a manylinux2014 cp312 wheel (numpy >= 2.3.0 dropped it),
-# so pip builds numpy from source and fails the image's GCC 10.2.1 check:
-#   ERROR: Problem encountered: NumPy requires GCC >= 10.3
-# The constraints file pins numpy to the last release with a manylinux2014 cp312
-# wheel so pip installs a prebuilt binary. See ci/test-constraints.txt.
-test-constraints = ["ci/test-constraints.txt"]
 # Build the wheel from the crate directory (the Cargo workspace root is one
 # level up; maturin resolves the workspace automatically).
 #
