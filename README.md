@@ -29,9 +29,8 @@ Phase 1 (the standard DMGS asymptotic-expansion integration path) is
 - **Quality gates** — `cargo clippy --workspace --all-targets -- -D warnings`
   and `cargo fmt --check` are clean.
 - **Packaging** — `R CMD build`/`INSTALL`/`check` succeeds (1 WARNING + 1 NOTE,
-  both inherent to Rust-backed CRAN packages and documented in
-  [`cran-comments.md`](crates/fitdistcp-r/cran-comments.md)); `maturin build`
-  produces a working wheel.
+  both inherent to Rust-backed R packages); `maturin build` produces a working
+  wheel. Release artifacts are distributed via GitHub releases only.
 
 **Phase 2 (posterior sampling) is deferred** — see
 [Known differences / limitations](#known-differences--limitations).
@@ -59,9 +58,8 @@ fitdistcp/
 │   ├── fitdistcp-r/                 # extendr binding (R package)
 │   │   ├── R/extendr-wrappers.R     # auto-generated wrappers
 │   │   ├── man/                     # 53 generated .Rd pages
-│   │   ├── NAMESPACE, DESCRIPTION   # CRAN-ready
-│   │   ├── configure, configure.win # vendored-crate build hooks
-│   │   └── cran-comments.md
+│   │   ├── NAMESPACE, DESCRIPTION   # R package metadata
+│   │   └── configure, configure.win # vendored-crate build hooks
 │   └── fitdistcp-py/                # PyO3 binding (maturin)
 │       ├── src/lib.rs               # private extension module (fitdistcp._fitdistcp)
 │       ├── python/fitdistcp/        # public submodule API (norm, genextreme, ...)
@@ -196,6 +194,49 @@ docker compose run --rm dev bash -lc \
    && pip install --quiet numpy pytest && maturin develop --quiet && pytest"
 ```
 
+## Installation
+
+Full instructions — including end-user installs from GitHub release artifacts and
+the dev-container workflow — live in [`INSTALL.md`](INSTALL.md:1). The short
+version:
+
+### Python (drop-in for the reference `fitdistcp` v0.0.4)
+
+```sh
+# End user: install a wheel (or sdist) from a GitHub release.
+pip install ./fitdistcp-0.0.4-cp312-cp312-manylinux_2_17_x86_64.whl
+
+# Dev container: build the extension from source and run the suite.
+docker compose run --rm dev bash -lc \
+  "cd crates/fitdistcp-py && python3 -m venv .venv && . .venv/bin/activate \
+   && pip install --quiet numpy pytest && maturin develop --quiet && pytest"
+```
+
+```python
+import fitdistcp
+fitdistcp.norm.ppf([1.0, 2.0, 3.0], p=[0.1, 0.5, 0.9])
+```
+
+### R (drop-in for the reference R `fitdistcp` API)
+
+```sh
+# End user: install the source tarball from a GitHub release.
+# Requires R >= 4.0 and a Rust toolchain (cargo + rustc >= 1.85) on PATH.
+R CMD INSTALL fitdistcp_0.1.0.tar.gz
+
+# Dev container: load the package and run the testthat suite.
+docker compose run --rm dev bash -lc \
+  "cd crates/fitdistcp-r && R -e \"devtools::load_all(quiet=TRUE); testthat::test_dir('tests/testthat')\""
+```
+
+```r
+library(fitdistcp)
+qnorm_cp(c(0.1, 0.5, 0.9), x = c(-1, 0, 1))
+```
+
+Artifacts are distributed via **GitHub releases only** — there is no PyPI or
+CRAN publishing step.
+
 ## Benchmarks
 
 Criterion benchmarks live under
@@ -289,17 +330,16 @@ Jobs:
 Triggered on every `push` and `pull_request`.
 
 [`.github/workflows/release.yml`](.github/workflows/release.yml) handles
-packaging: the R source tarball, `cibuildwheel` wheels, and PyPI publishing via
-Trusted Publishing.
+packaging: the R source tarball, `cibuildwheel` wheels, and the Python sdist are
+attached to the GitHub release (tag pushes only). There is no PyPI or CRAN
+publishing step.
 
 ### Packaging status
 
 - **R:** `R CMD build` / `INSTALL` / `check` succeeds with **1 WARNING + 1
-  NOTE**, both inherent to Rust-backed CRAN packages and documented in
-  [`cran-comments.md`](crates/fitdistcp-r/cran-comments.md). Rust crates are
-  vendored for standalone builds via
-  [`tools/vendor-r-crate.sh`](tools/vendor-r-crate.sh), with `configure` /
-  `configure.win` build hooks.
+  NOTE**, both inherent to Rust-backed R packages. Rust crates are vendored for
+  standalone builds via [`tools/vendor-r-crate.sh`](tools/vendor-r-crate.sh),
+  with `configure` / `configure.win` build hooks.
 - **Python:** `maturin build` produces a working wheel.
 
 ## Known differences / limitations

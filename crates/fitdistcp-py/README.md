@@ -119,12 +119,60 @@ Notes on specific fields:
    the predictive distribution, not the point estimates (the reference likewise
    reports the MLE parameters for the CP model).
 
-## Build & test (inside the dev container)
+## Installation
+
+See [`INSTALL.md`](../../INSTALL.md:1) for the full guide (including the R
+binding). The Python-specific paths are below.
+
+### End-user install (from a GitHub release)
+
+Download the wheel (or sdist) for your platform from the
+[GitHub releases page](https://github.com/stephenjewson/fitdistcp/releases), then:
 
 ```sh
-maturin develop
-python -c "import fitdistcp; fitdistcp.norm.ppf([1.0,2.0,3.0])"
-pytest
+# From a wheel (recommended — no Rust toolchain needed).
+pip install ./fitdistcp-0.0.4-cp312-cp312-manylinux_2_17_x86_64.whl
+
+# Or from the source distribution (requires a Rust toolchain + maturin).
+pip install ./fitdistcp-0.0.4.tar.gz
+```
+
+Prebuilt wheels are published for CPython **3.9–3.14** on manylinux, macOS
+(Intel + Apple Silicon), and Windows; `numpy>=1.22` is the only runtime
+dependency. On Linux, the 3.9–3.13 wheels target glibc 2.17 (`manylinux2014`)
+and the 3.14 wheels target glibc 2.28 (`manylinux_2_28`). The package itself
+supports CPython **>= 3.9** (`requires-python = ">=3.9"`), so newer versions
+work too — they just have no prebuilt wheel yet (install from the sdist
+instead). Artifacts are distributed via **GitHub releases only** — there is no
+PyPI publishing step.
+
+Verify the drop-in install:
+
+```python
+import fitdistcp
+fitdistcp.norm.ppf([1.0, 2.0, 3.0], p=[0.1, 0.5, 0.9])
+```
+
+### Dev-container install (from source)
+
+```sh
+# Build the image once.
+docker compose build
+
+# Create a venv, install test deps, build the extension, and run the suite.
+docker compose run --rm dev bash -lc \
+  "cd crates/fitdistcp-py && python3 -m venv .venv && . .venv/bin/activate \
+   && pip install --quiet numpy pytest && maturin develop --quiet && pytest"
+```
+
+`maturin develop` compiles the PyO3 extension (`fitdistcp._fitdistcp`) and
+installs the thin Python submodules from
+[`python/fitdistcp/`](python/fitdistcp/__init__.py:1) into the active virtualenv.
+To build a distributable wheel locally:
+
+```sh
+docker compose run --rm dev bash -lc \
+  "cd crates/fitdistcp-py && maturin build --out dist"
 ```
 
 The full pytest suite is **109 passed, 1 skipped**. The skip is the gamma

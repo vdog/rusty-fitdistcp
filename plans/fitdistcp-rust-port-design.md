@@ -30,7 +30,7 @@ These are locked in per user direction; they appear as decisions, not open quest
 - **Crate names:** `fitdistcp-core` (numerics), `fitdistcp-r` (extendr binding), `fitdistcp-py` (PyO3 binding).
 - **Phase 1 model list (10):** `norm`, `norm_p1`, `genextreme` (GEV), `genextreme_p1`, `genpareto` (GPD), `gumbel`, `lnorm`, `weibull`, `gamma`, `expon`.
 - **Numerics policy:** analytic derivatives first, numerical fallback where analytic is not yet derived.
-- **CI/packaging target:** CRAN-style R package (via `rextendr`) + PyPI wheels (via `maturin`/`cibuildwheel`).
+- **CI/packaging target:** R package (via `rextendr`) + Python wheels (via `maturin`/`cibuildwheel`), distributed via GitHub releases only (no CRAN/PyPI publishing).
 - **Golden-test tolerance policy:** see §7.
 - **Only remaining open question:** Northrop `rust` package interop strategy (see §9).
 
@@ -223,8 +223,8 @@ fitdistcp/                      # Cargo workspace root
 ### 9.3 CI / packaging (locked in)
 
 - **CI runs the same Docker image** so local and CI environments are identical (no "works on my machine" drift).
-- **R:** GitHub Actions running `R CMD check` (CRAN-style) on Linux/macOS/Windows; package structured for CRAN submission.
-- **Python:** `cibuildwheel` producing manylinux/macOS/Windows wheels; publish to PyPI.
+- **R:** GitHub Actions running `R CMD check` on Linux/macOS/Windows; the source tarball is attached to the GitHub release.
+- **Python:** `cibuildwheel` producing manylinux/macOS/Windows wheels; wheels + sdist attached to the GitHub release.
 - **Rust core:** `cargo test` + `cargo clippy` + `criterion` benchmarks on every PR.
 
 ---
@@ -271,8 +271,8 @@ fitdistcp/                      # Cargo workspace root
 - `reltest` reliability simulation.
 - Golden fixtures + tolerance policy wired into CI.
 - CI reuses the same Docker image as local dev.
-- CRAN-style `R CMD check` + `cibuildwheel` PyPI wheels.
-- **Milestone:** green CI on all platforms; packages publishable.
+- `R CMD check` + `cibuildwheel` wheels, attached to the GitHub release.
+- **Milestone:** green CI on all platforms; release artifacts buildable.
 
 ### Phase 2 (deferred) — Posterior sampling
 - Plug posterior sampling into the `Integrator` trait.
@@ -291,7 +291,7 @@ fitdistcp/                      # Cargo workspace root
 | Negative-shape GEV beyond MLE bound | Correctness | Quantile-derived density path + relaxed tolerance |
 | Analytic derivative coverage incomplete | Accuracy/perf | Numerical fallback behind a trait |
 | Northrop `rust` interop (Phase 2) | Scope | Deferred; open question |
-| CRAN policy constraints on Rust build | Packaging | Follow rextendr CRAN guidance; vendor crates |
+| Rust build isolation for the R tarball | Packaging | Follow rextendr guidance; vendor crates |
 
 ---
 

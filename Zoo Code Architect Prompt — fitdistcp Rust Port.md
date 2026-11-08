@@ -34,7 +34,7 @@ Reference material: GitHub repo `stephenjewson/fitdistcp`; full model list, meth
     
 6.  **Future-proofing for posterior sampling.** Design the integration interface so a later phase can plug in posterior sampling, and note that the reference uses Paul Northrop's `rust` package (Ratio-of-Uniforms Simulation with Transformation) — flag as an open question whether to reuse its algorithm from R, reimplement it in Rust, or interop via extendr, since it is an R package not a Rust crate.
     
-7.  **Project structure.** Cargo workspace (core crate + two binding crates), CMake/`rextendr` and maturin build paths, test framework, CI (R CMD check + cibuildwheel), and packaging for both CRAN-style and PyPI distribution.
+7.  **Project structure.** Cargo workspace (core crate + two binding crates), CMake/`rextendr` and maturin build paths, test framework, CI (R CMD check + cibuildwheel), and packaging for GitHub-release distribution (no CRAN/PyPI publishing).
     
 
 ### Output format
