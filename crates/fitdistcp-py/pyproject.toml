@@ -109,6 +109,17 @@ manylinux-aarch64-image = "manylinux_2_28"
 [tool.cibuildwheel.macos]
 # Build for both Intel and Apple Silicon.
 archs = ["x86_64", "arm64"]
+# Pin the macOS deployment target so the wheel tag and the compiled binary agree.
+#
+# Rust 1.85 defaults the x86_64-apple-darwin target to
+# MACOSX_DEPLOYMENT_TARGET=10.12, but cibuildwheel tags cp39 wheels as
+# macosx_10_9. delocate then rejects the wheel because the binary's minimum
+# target (10.12) exceeds the tag (10.9):
+#   delocate.libsana.DelocationError: Library dependencies do not satisfy
+#   target MacOS version 10.9: ... has a minimum target of 10.12
+# Setting the env var here makes cibuildwheel tag the wheel macosx_10_12,
+# matching the binary that rustc actually produces.
+environment = { MACOSX_DEPLOYMENT_TARGET = "10.12" }
 # The macOS runners are Apple Silicon (arm64), so building the x86_64 wheel is a
 # CROSS-compilation. The pinned toolchain (1.85.0, from rust-toolchain.toml) is
 # installed with only the host (aarch64-apple-darwin) std, so `cargo` cannot find
