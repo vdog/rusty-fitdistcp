@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "fitdistcp"
-version = "0.1.0"
+version = "0.0.4"
 description = "Calibrating prior prediction for distributions (Rust port, Python bindings)."
 readme = "README.md"
 requires-python = ">=3.9"
@@ -34,7 +34,11 @@ Repository = "https://github.com/stephenjewson/fitdistcp"
 test = ["pytest>=7.0"]
 
 [tool.maturin]
-module-name = "fitdistcp"
+# B1: the extension module is private (`fitdistcp._fitdistcp`); the public API is
+# provided by the thin Python submodules under `python/fitdistcp/` (B3).
+module-name = "fitdistcp._fitdistcp"
+# B5: ship the Python package alongside the compiled extension.
+python-source = "python"
 manifest-path = "Cargo.toml"
 features = ["pyo3/extension-module"]
 # Build abi3 wheels so a single wheel per platform works across CPython 3.9+.

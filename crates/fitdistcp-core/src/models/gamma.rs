@@ -103,6 +103,57 @@ impl Gamma {
         let x = inverse_regularized_gamma(shape, p);
         x / rate
     }
+
+    // --- (shape, scale) parameterization (A5) ------------------------------
+    //
+    // The reference `fitdistcp` gamma module uses the `(shape, scale)`
+    // parameterization (`gamma.py` / `gamma_libs.py`), where `scale = 1/rate`.
+    // The core model above uses `(shape, rate)` (matching R's `dgamma` with
+    // `rate`). These entry points expose the reference parameterization at the
+    // boundary so the Python binding can honor it without duplicating the
+    // numerics: each simply converts `rate = 1/scale` and delegates.
+
+    /// Convert a `(shape, scale)` pair to the core `(shape, rate)` pair.
+    ///
+    /// `rate = 1/scale`. This is the boundary conversion the reference
+    /// parameterization requires.
+    #[inline]
+    pub fn scale_to_rate(scale: f64) -> f64 {
+        1.0 / scale
+    }
+
+    /// Log-density `ln f(y; shape, scale)` in the reference `(shape, scale)`
+    /// parameterization.
+    pub fn logpdf_scale(&self, y: f64, shape: f64, scale: f64) -> f64 {
+        self.logpdf(y, shape, Self::scale_to_rate(scale))
+    }
+
+    /// Density `f(y; shape, scale)` in the reference `(shape, scale)`
+    /// parameterization.
+    pub fn pdf_scale(&self, y: f64, shape: f64, scale: f64) -> f64 {
+        self.pdf(y, shape, Self::scale_to_rate(scale))
+    }
+
+    /// CDF `F(y; shape, scale)` in the reference `(shape, scale)`
+    /// parameterization.
+    pub fn cdf_scale(&self, y: f64, shape: f64, scale: f64) -> f64 {
+        self.cdf(y, shape, Self::scale_to_rate(scale))
+    }
+
+    /// Quantile `F^{-1}(p; shape, scale)` in the reference `(shape, scale)`
+    /// parameterization.
+    pub fn quantile_scale(&self, p: f64, shape: f64, scale: f64) -> f64 {
+        self.quantile(p, shape, Self::scale_to_rate(scale))
+    }
+
+    /// The reference `gamma_means` MLE mean `shape · scale`.
+    ///
+    /// In the `(shape, scale)` parameterization the gamma mean is
+    /// `E[Y] = shape · scale` (reference `gamma_libs.py::gamma_means`).
+    #[inline]
+    pub fn mean_scale(&self, shape: f64, scale: f64) -> f64 {
+        shape * scale
+    }
 }
 
 /// Invert the regularized lower incomplete gamma `P(a, x) = p` for `x > 0`.
@@ -374,5 +425,54 @@ mod tests {
         for (i, gi) in g.iter().enumerate() {
             assert!(gi.abs() < 1e-6, "score[{i}] at MLE = {gi}");
         }
+    }
+
+    // --- A5: (shape, scale) parameterization --------------------------------
+
+    #[test]
+    fn scale_entry_points_match_rate_parameterization() {
+        // The reference uses (shape, scale); the core uses (shape, rate) with
+        // rate = 1/scale. The scale entry points must agree with the rate ones
+        // evaluated at rate = 1/scale.
+        let m = Gamma;
+        let (shape, scale) = (2.5, 1.3);
+        let rate = 1.0 / scale;
+        for &y in &[0.3_f64, 1.0, 2.5] {
+            assert_close(
+                m.logpdf_scale(y, shape, scale),
+                m.logpdf(y, shape, rate),
+                "logpdf_scale",
+            );
+            assert_close(
+                m.pdf_scale(y, shape, scale),
+                m.pdf(y, shape, rate),
+                "pdf_scale",
+            );
+            assert_close(
+                m.cdf_scale(y, shape, scale),
+                m.cdf(y, shape, rate),
+                "cdf_scale",
+            );
+        }
+        for &p in &[0.1_f64, 0.5, 0.9] {
+            assert_close(
+                m.quantile_scale(p, shape, scale),
+                m.quantile(p, shape, rate),
+                "quantile_scale",
+            );
+        }
+    }
+
+    #[test]
+    fn scale_to_rate_is_reciprocal() {
+        assert_close(Gamma::scale_to_rate(2.0), 0.5, "scale_to_rate(2)");
+        assert_close(Gamma::scale_to_rate(0.25), 4.0, "scale_to_rate(0.25)");
+    }
+
+    #[test]
+    fn mean_scale_matches_reference() {
+        // Reference gamma_means: ml_mean = shape * scale.
+        let m = Gamma;
+        assert_close(m.mean_scale(2.5, 1.3), 3.25, "mean_scale");
     }
 }

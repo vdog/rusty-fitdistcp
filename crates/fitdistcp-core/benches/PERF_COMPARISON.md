@@ -3,10 +3,21 @@
 This document is the **single source of truth** for the cross-language
 execution-time benchmark described in
 [`plans/cross-language-benchmark-plan.md`](../../../plans/cross-language-benchmark-plan.md).
-All three harnesses — the Rust port in this workspace, the reference R package
-(`stephenjewson/fitdistcp` v0.2.3, vendored at `tools/fitdistcp-ref/`), and the
-Python module (`lynnejewson/fitdistcp`, cloned to `tools/fitdistcp-py-ref/`) —
-MUST consume the exact inputs defined here so the numbers are comparable.
+All four harnesses — the Rust port in this workspace, the reference R package
+(`stephenjewson/fitdistcp` v0.2.3, vendored at `tools/fitdistcp-ref/`), the
+reference Python module (`lynnejewson/fitdistcp`, cloned to
+`tools/fitdistcp-py-ref/`), and the Rust-backed Python drop-in binding
+(`crates/fitdistcp-py`, built with maturin) — MUST consume the exact inputs
+defined here so the numbers are comparable.
+
+The four implementations are:
+
+| Label | Implementation | Notes |
+|---|---|---|
+| `rust` | Rust port (this workspace) | Calls the core directly. |
+| `ref_r` | Reference R package | `stephenjewson/fitdistcp` v0.2.3. |
+| `py_module` | Reference Python module | `lynnejewson/fitdistcp` (pure Python). |
+| `rust_binding` | Rust-backed Python drop-in binding | `crates/fitdistcp-py`; compiled Rust behind a Python boundary; the drop-in replacement for the reference Python package. |
 
 Nothing in this document changes numerics. It only fixes the *workload*.
 
@@ -37,12 +48,12 @@ For each `(model, operation, n)` the harness:
 2. fits the model once (MLE) **outside** the timed region,
 3. times the operation over the 100-point prediction grid.
 
-| Operation | Rust port | Reference R | Python module |
-|---|---|---|---|
-| `pdf` | `predict(...).cp_pdf` / `cp_pdf` | `dnorm_cp` / `dgev_cp` / `dgamma_cp` | `fitdistcp.<model>.pdf(x, y=...)['cp_pdf']` |
-| `cdf` | `predict(...).cp_cdf` / `cp_cdf` | `pnorm_cp` / `pgev_cp` / `pgamma_cp` | `fitdistcp.<model>.cdf(x, y=...)['cp_cdf']` |
-| `ppf` | `predict(...).cp_quantiles` / `cp_quantiles` | `qnorm_cp` / `qgev_cp` / `qgamma_cp` | `fitdistcp.<model>.ppf(x, p=...)['cp_quantiles']` |
-| `rvs` | `predict(...).cp_rvs` / `cp_rvs` | `rnorm_cp` / `rgev_cp` / `rgamma_cp` | `fitdistcp.<model>.rvs(n, x)['cp_deviates']` |
+| Operation | Rust port | Reference R | Python module | Rust binding |
+|---|---|---|---|---|
+| `pdf` | `predict(...).cp_pdf` / `cp_pdf` | `dnorm_cp` / `dgev_cp` / `dgamma_cp` | `fitdistcp.<model>.pdf(x, y=...)['cp_pdf']` | `fitdistcp.<model>.pdf(x, y=...)['cp_pdf']` |
+| `cdf` | `predict(...).cp_cdf` / `cp_cdf` | `pnorm_cp` / `pgev_cp` / `pgamma_cp` | `fitdistcp.<model>.cdf(x, y=...)['cp_cdf']` | `fitdistcp.<model>.cdf(x, y=...)['cp_cdf']` |
+| `ppf` | `predict(...).cp_quantiles` / `cp_quantiles` | `qnorm_cp` / `qgev_cp` / `qgamma_cp` | `fitdistcp.<model>.ppf(x, p=...)['cp_quantiles']` | `fitdistcp.<model>.ppf(x, p=...)['cp_quantiles']` |
+| `rvs` | `predict(...).cp_rvs` / `cp_rvs` | `rnorm_cp` / `rgev_cp` / `rgamma_cp` | `fitdistcp.<model>.rvs(n, x)['cp_deviates']` | `fitdistcp.<model>.rvs(n, x)['cp_deviates']` |
 
 ### 1.2 End-to-end `predict` (MLE + DMGS)
 
@@ -51,11 +62,11 @@ DMGS expansion) on the same 100-point grid. This is the quantity that exposes
 the algorithmic difference between the reference `optim` (Nelder–Mead) and the
 Rust BFGS + Newton path.
 
-| Model | Rust port | Reference R | Python module |
-|---|---|---|---|
-| `norm` | `predict(Normal, req, init)` | `qnorm_cp` (full pipeline) | `fitdistcp.norm.ppf(...)` |
-| `genextreme` | `predict(GenExtreme, req, init)` | `qgev_cp` (full pipeline) | `fitdistcp.genextreme.ppf(...)` |
-| `gamma` | `predict(Gamma, req, init)` | `qgamma_cp` (full pipeline) | `fitdistcp.gamma.ppf(...)` |
+| Model | Rust port | Reference R | Python module | Rust binding |
+|---|---|---|---|---|
+| `norm` | `predict(Normal, req, init)` | `qnorm_cp` (full pipeline) | `fitdistcp.norm.ppf(...)` | `fitdistcp.norm.ppf(...)` |
+| `genextreme` | `predict(GenExtreme, req, init)` | `qgev_cp` (full pipeline) | `fitdistcp.genextreme.ppf(...)` | `fitdistcp.genextreme.ppf(...)` |
+| `gamma` | `predict(Gamma, req, init)` | `qgamma_cp` (full pipeline) | `fitdistcp.gamma.ppf(...)` | `fitdistcp.gamma.ppf(...)` |
 
 ### 1.3 reltest (reliability simulation)
 
@@ -188,14 +199,14 @@ matching [`mle_fitting.rs`](mle_fitting.rs).
 
 ## 4. API mapping across implementations
 
-| Operation | Rust port | Reference R | Python module |
-|---|---|---|---|
-| pdf | `predict(...)` / `cp_pdf` | `dnorm_cp` / `dgev_cp` / `dgamma_cp` | `fitdistcp.<model>.pdf(x, y=...)['cp_pdf']` |
-| cdf | `predict(...)` / `cp_cdf` | `pnorm_cp` / `pgev_cp` / `pgamma_cp` | `fitdistcp.<model>.cdf(x, y=...)['cp_cdf']` |
-| ppf | `predict(...)` / `cp_quantiles` | `qnorm_cp` / `qgev_cp` / `qgamma_cp` | `fitdistcp.<model>.ppf(x, p=...)['cp_quantiles']` |
-| rvs | `predict(...)` / `cp_rvs` | `rnorm_cp` / `rgev_cp` / `rgamma_cp` | `fitdistcp.<model>.rvs(n, x)['cp_deviates']` |
-| end-to-end | `predict(model, req, init)` | `q*_cp` (full pipeline) | `fitdistcp.<model>.ppf(...)` |
-| reltest | `fitdistcp_core` reltest port | `reltest` / `reltest2` | `fitdistcp.reltest.reltest_<model>` |
+| Operation | Rust port | Reference R | Python module | Rust binding |
+|---|---|---|---|---|
+| pdf | `predict(...)` / `cp_pdf` | `dnorm_cp` / `dgev_cp` / `dgamma_cp` | `fitdistcp.<model>.pdf(x, y=...)['cp_pdf']` | `fitdistcp.<model>.pdf(x, y=...)['cp_pdf']` |
+| cdf | `predict(...)` / `cp_cdf` | `pnorm_cp` / `pgev_cp` / `pgamma_cp` | `fitdistcp.<model>.cdf(x, y=...)['cp_cdf']` | `fitdistcp.<model>.cdf(x, y=...)['cp_cdf']` |
+| ppf | `predict(...)` / `cp_quantiles` | `qnorm_cp` / `qgev_cp` / `qgamma_cp` | `fitdistcp.<model>.ppf(x, p=...)['cp_quantiles']` | `fitdistcp.<model>.ppf(x, p=...)['cp_quantiles']` |
+| rvs | `predict(...)` / `cp_rvs` | `rnorm_cp` / `rgev_cp` / `rgamma_cp` | `fitdistcp.<model>.rvs(n, x)['cp_deviates']` | `fitdistcp.<model>.rvs(n, x)['cp_deviates']` |
+| end-to-end | `predict(model, req, init)` | `q*_cp` (full pipeline) | `fitdistcp.<model>.ppf(...)` | `fitdistcp.<model>.ppf(...)` |
+| reltest | `fitdistcp_core` reltest port | `reltest` / `reltest2` | `fitdistcp.reltest.reltest_<model>` | `fitdistcp.reltest.reltest(model, ntrials, nx, p, true_params, init)` |
 
 Confirmed reference entry points:
 
@@ -218,28 +229,36 @@ These are recorded in the results header so the numbers are not misread:
 2. **Interpreted vs compiled.** The Python module is pure Python (interpreted);
    the Rust port is compiled. Pointwise operations therefore show a large
    constant-factor gap that is a language/runtime effect, not an algorithmic one.
-3. **Monte Carlo reltest.** reltest is a stochastic workload. The three
+3. **Rust binding boundary.** The Rust binding (`rust_binding`) is compiled Rust
+   behind a Python boundary: it is the drop-in replacement for the reference
+   Python package, exposing the same submodule API (`fitdistcp.<model>.pdf(...)`
+   etc.). Its numbers should therefore sit **between** the pure-Rust core
+   (`rust`) and the pure-Python reference (`py_module`): the Python↔Rust call and
+   argument/result marshalling overhead is the gap to `rust`, while the compiled
+   core is the gap to `py_module`. It is not expected to match the pure-Rust
+   core, nor to be as slow as the pure-Python reference.
+4. **Monte Carlo reltest.** reltest is a stochastic workload. The
    implementations are matched on `ntrials`/`nx`/`params` and use a fixed seed
    where the implementation allows seeding; residual differences are sampling
    noise, not performance.
-4. **Parameterization.** The reference gamma uses `(shape, scale)`; the Rust
+5. **Parameterization.** The reference gamma uses `(shape, scale)`; the Rust
    port uses `(shape, rate)`. The harness converts so the *same distribution* is
    fit (`scale = 1 / rate`). The reltest `params` in §1.3.1 are given in each
    implementation's native order.
-5. **Criterion vs wall-clock.** Criterion numbers and the CSV `Instant` numbers
+6. **Criterion vs wall-clock.** Criterion numbers and the CSV `Instant` numbers
    may differ slightly. The CSV is the cross-implementation comparison source;
    Criterion remains the Rust-internal regression baseline.
-6. **Gamma domain restriction.** The shared prediction grid `grid.x` spans
+7. **Gamma domain restriction.** The shared prediction grid `grid.x` spans
    `[-3, 3]`, but the gamma distribution has support `x > 0`. The reference R
    gamma routines hard-reject non-positive `x` (`stopifnot(!x < 0)`), and the
    reference Python gamma derivative code raises at `x = 0` (`log(0) = -inf`).
-   To keep the three implementations comparable, the gamma `pdf`/`cdf`/`rvs`
+   To keep the implementations comparable, the gamma `pdf`/`cdf`/`rvs`
    workloads are evaluated on the **strictly-positive subset** of the grid
-   (`x > 0`, 49 of the 100 points) in all three harnesses. The `ppf` workload
+   (`x > 0`, 49 of the 100 points) in all harnesses. The `ppf` workload
    (which uses `p ∈ (0, 1)`) and the end-to-end `predict` workload (which uses
    `p`) are unaffected. The `(model, operation, n)` keys are identical across
    implementations.
-7. **R timer resolution.** R's `proc.time()[["elapsed"]]` has ~1 ms resolution,
+8. **R timer resolution.** R's `proc.time()[["elapsed"]]` has ~1 ms resolution,
    so the R harness times a calibrated *batch* of calls per sample and divides
    by the batch size (see `time_workload` in `tools/bench/bench_ref_r.R`). This
    makes sub-millisecond workloads (e.g. the norm pointwise operations)
@@ -257,10 +276,11 @@ These are recorded in the results header so the numbers are not misread:
   - Rust: Criterion (statistical) + `std::time::Instant` loop for the CSV.
   - Reference R: `system.time()` / `proc.time()` deltas.
   - Python module: `time.perf_counter_ns`.
+  - Rust binding: `time.perf_counter_ns` (the same Python harness, `--impl rust`).
 - **Isolation**: inputs pre-generated outside the timed region; each workload
   timed in its own loop.
 - **Determinism**: fixed seeds; identical embedded data vectors (§3) so all
-  three implementations fit the same data.
+  implementations fit the same data.
 - **Environment capture**: host, container image tag, Rust/R/Python versions,
   CPU count, and reference git commit SHAs in the results header.
 
@@ -274,7 +294,7 @@ Every harness emits rows with exactly this header:
 implementation,model,operation,n,median_ns,min_ns,max_ns,repeats
 ```
 
-- `implementation` ∈ {`rust`, `ref_r`, `py_module`}.
+- `implementation` ∈ {`rust`, `ref_r`, `py_module`, `rust_binding`}.
 - `model` ∈ {`norm`, `genextreme`, `gamma`}.
 - `operation` ∈ {`pdf`, `cdf`, `ppf`, `rvs`, `predict`, `reltest`}.
 - `n` is the sample size (for `predict`/`reltest`, the configured `n`/`nx`).
@@ -288,8 +308,9 @@ implementation,model,operation,n,median_ns,min_ns,max_ns,repeats
 rust,norm,pdf,500,123456,120000,130000,20
 ref_r,norm,pdf,500,234567,230000,240000,20
 py_module,norm,pdf,500,345678,340000,350000,20
+rust_binding,norm,pdf,500,150000,145000,155000,20
 ```
 
 The aggregator (`tools/bench/aggregate_perf.py`) pivots this into one row per
 `(model, operation, n)` with columns `Rust`, `Reference R`, `Python module`,
-and `R/Rust`, `Py/Rust` ratios.
+`Rust binding`, and `R/Rust`, `Py/Rust`, `RustBinding/Rust` ratios.

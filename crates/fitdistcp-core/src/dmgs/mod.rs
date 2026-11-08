@@ -387,6 +387,27 @@ impl<M: DmgsModel + Sync> DmgsIntegrator<M> {
             .collect()
     }
 
+    /// The MLE and CP predictive means (reference `*_means`).
+    ///
+    /// Returns `(ml_mean, cp_mean)` where `ml_mean = E[Y; θ]` and
+    /// `cp_mean = ml_mean + dmgs_scalar(lddi, lddd, meand1, pidopi, meand2, p)/n`
+    /// (the reference `*_means` construction). The mean derivatives come from
+    /// [`DmgsModel::mean_derivs`] (analytic where overridden).
+    pub fn cp_mean(&self, params: &[f64], y: &[f64]) -> (f64, f64) {
+        let p = self.model.n_params();
+        let n = y.len() as f64;
+        let (ml_mean, meand1, meand2) = self.model.mean_derivs(params);
+        let ldd = self.normalized_ldd(params, y);
+        let lddi = match invert(&ldd) {
+            Some(inv) => inv,
+            None => return (ml_mean, f64::NAN),
+        };
+        let lddd = self.normalized_lddd(params, y);
+        let pidopi = self.log_prior_slope(params);
+        let dmean = dmgs_scalar(&lddi, &lddd, &meand1, &pidopi, &meand2, p);
+        (ml_mean, ml_mean + dmean / n)
+    }
+
     /// The CP predictive density **derived from the CP quantile function**
     /// (reference `qgev_cp`'s `rh_flat_pdf`).
     ///
@@ -501,6 +522,82 @@ pub trait DmgsModel: Derivatives {
             v[1] = -1.0 / params[1];
         }
         v
+    }
+
+    /// The model mean `E[Y; θ]` and its first/second derivatives w.r.t. the
+    /// parameters (reference `*_means`).
+    ///
+    /// Returns `(ml_mean, meand1, meand2)` where `ml_mean = E[Y; θ]`,
+    /// `meand1[i] = ∂E[Y]/∂θ_i` (length `p`), and `meand2[i*p + j] =
+    /// ∂²E[Y]/∂θ_i∂θ_j` (row-major `p × p`). The CP predictive mean is then
+    /// `cp_mean = ml_mean + dmgs_scalar(lddi, lddd, meand1, pidopi, meand2, p)/n`
+    /// (reference `*_means`).
+    ///
+    /// The default computes `ml_mean` by numerical integration of the density
+    /// and the derivatives by central finite differences of that integral. A
+    /// model with a closed-form mean overrides this with the reference's
+    /// analytic expression.
+    fn mean_derivs(&self, params: &[f64]) -> (f64, Vec<f64>, Vec<f64>) {
+        let p = self.n_params();
+        let cfg = self.dmgs_fd_config();
+        let mean_at = |q: &[f64]| self.numerical_mean(q);
+        let ml_mean = mean_at(params);
+        let mut meand1 = vec![0.0; p];
+        for i in 0..p {
+            let h = cfg.step_for(params[i]);
+            let mut pp = params.to_vec();
+            let mut pm = params.to_vec();
+            pp[i] += h;
+            pm[i] -= h;
+            meand1[i] = (mean_at(&pp) - mean_at(&pm)) / (2.0 * h);
+        }
+        let mut meand2 = vec![0.0; p * p];
+        for i in 0..p {
+            let hi = cfg.step_for_2(params[i]);
+            let mut pp = params.to_vec();
+            let mut pm = params.to_vec();
+            pp[i] += hi;
+            pm[i] -= hi;
+            meand2[i * p + i] = (mean_at(&pp) - 2.0 * ml_mean + mean_at(&pm)) / (hi * hi);
+            for j in (i + 1)..p {
+                let hj = cfg.step_for_2(params[j]);
+                let eval = |di: f64, dj: f64| {
+                    let mut q = params.to_vec();
+                    q[i] += di;
+                    q[j] += dj;
+                    mean_at(&q)
+                };
+                let val = (eval(hi, hj) - eval(hi, -hj) - eval(-hi, hj) + eval(-hi, -hj))
+                    / (4.0 * hi * hj);
+                meand2[i * p + j] = val;
+                meand2[j * p + i] = val;
+            }
+        }
+        (ml_mean, meand1, meand2)
+    }
+
+    /// Numerical mean `∫ x f(x; θ) dx` used by the default [`DmgsModel::mean_derivs`].
+    ///
+    /// Integrates over a wide, model-agnostic bracket using the trapezoid rule.
+    /// Models with a closed-form mean override [`DmgsModel::mean_derivs`] and
+    /// never call this.
+    fn numerical_mean(&self, params: &[f64]) -> f64 {
+        // A wide bracket centred on the quantile range; the density decays to
+        // zero well inside it for the Phase-1 models.
+        let lo = self.quantile(1e-9, params);
+        let hi = self.quantile(1.0 - 1e-9, params);
+        if !lo.is_finite() || !hi.is_finite() || hi <= lo {
+            return f64::NAN;
+        }
+        let n = 2000usize;
+        let h = (hi - lo) / n as f64;
+        let mut acc = 0.0;
+        for k in 0..=n {
+            let x = lo + k as f64 * h;
+            let w = if k == 0 || k == n { 0.5 } else { 1.0 };
+            acc += w * x * self.pdf(x, params);
+        }
+        acc * h
     }
 
     /// Finite-difference configuration used by the **numerical defaults** of the

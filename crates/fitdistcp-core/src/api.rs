@@ -86,10 +86,33 @@ pub struct FitResult {
     pub aic: f64,
     /// Modified Akaike Information Criterion (`MAIC`).
     pub maic: f64,
+    /// The maximized log-likelihood (`ml_value`), reference `ml_value`.
+    ///
+    /// Phase B amendment: the reference reports `ml_value` as the maximized
+    /// log-likelihood directly (e.g. `norm.py`: `ml_value = sum(logpdf(x))`),
+    /// not reconstructed from `aic`. The core now carries it explicitly so the
+    /// bindings can surface the exact reference value.
+    pub loglik: f64,
     /// Optional Watanabe–Akaike Information Criterion (`WAIC`).
     pub waic: Option<f64>,
     /// Optional log-score diagnostics (`logscores`).
     pub log_scores: Option<Vec<f64>>,
+    /// MLE predictive mean (`ml_mean`), reference `*_means`.
+    pub ml_mean: f64,
+    /// CP (calibrated-prior) predictive mean (`cp_mean`), reference `*_means`.
+    pub cp_mean: f64,
+    /// WAIC variant 1, the 3-vector `[lppd, -pwaic1, sum]` (reference
+    /// `make_waic`). `None` when WAIC was not requested.
+    pub waic1: Option<[f64; 3]>,
+    /// WAIC variant 2, the 3-vector `[lppd, -pwaic2, sum]` (reference
+    /// `make_waic`). `None` when WAIC was not requested.
+    pub waic2: Option<[f64; 3]>,
+    /// Leave-one-out MLE out-of-sample log-score (`ml_oos_logscore`).
+    /// `None` when log-scores were not requested.
+    pub ml_oos_logscore: Option<f64>,
+    /// Leave-one-out CP out-of-sample log-score (`cp_oos_logscore`).
+    /// `None` when log-scores were not requested.
+    pub cp_oos_logscore: Option<f64>,
     /// Convergence status of the underlying MLE fit (§4.2).
     pub convergence: Convergence,
     /// `true` when the sample size is below the small-n threshold (§4.4).
@@ -157,6 +180,9 @@ pub fn predict<M: crate::dmgs::DmgsModel + Copy + Sync>(
     // the sum `ml_value - n_params`.
     let maic = mle.loglik - mle.n_params as f64;
 
+    // A1: MLE and CP predictive means (reference `*_means`).
+    let (ml_mean, cp_mean) = integ.cp_mean(&mle.ml_params, &req.y);
+
     FitResult {
         ml_pdf,
         cp_pdf,
@@ -170,8 +196,15 @@ pub fn predict<M: crate::dmgs::DmgsModel + Copy + Sync>(
         cp_se: mle.ml_se.clone(),
         aic: mle.aic,
         maic,
+        loglik: mle.loglik,
         waic: None,
         log_scores: None,
+        ml_mean,
+        cp_mean,
+        waic1: None,
+        waic2: None,
+        ml_oos_logscore: None,
+        cp_oos_logscore: None,
         convergence: mle.convergence,
         small_n: mle.small_n,
     }
@@ -248,6 +281,13 @@ pub fn predict_gev(
 
     let maic = mle.loglik - mle.n_params as f64;
 
+    // A1: MLE and CP predictive means (reference `gev_means`). The reference
+    // reports `rh_flat_mean = inf` for the GEV (integrating over the shape makes
+    // the mean infinite), so `cp_mean` is `+inf`; `ml_mean` is the analytic MLE
+    // mean from `gev_means`.
+    let (ml_mean, _cp_mean_dmgs) = integ.cp_mean(&mle.ml_params, &req.y);
+    let cp_mean = f64::INFINITY;
+
     FitResult {
         ml_pdf,
         cp_pdf,
@@ -259,8 +299,15 @@ pub fn predict_gev(
         cp_se: mle.ml_se.clone(),
         aic: mle.aic,
         maic,
+        loglik: mle.loglik,
         waic: None,
         log_scores: None,
+        ml_mean,
+        cp_mean,
+        waic1: None,
+        waic2: None,
+        ml_oos_logscore: None,
+        cp_oos_logscore: None,
         convergence: mle.convergence,
         small_n: mle.small_n,
     }
@@ -303,6 +350,13 @@ pub struct NormP1Result {
     pub ml_value: f64,
     /// The prediction point `muhat0 = a + b·(t0 - mean(t))`.
     pub muhat0: f64,
+    /// MLE predictive mean (`ml_mean`). For the normal the predictive mean is
+    /// the location `muhat0` (reference `norm.py`: `ml_mean = v1hat`).
+    pub ml_mean: f64,
+    /// CP predictive mean (`cp_mean`). For the analytic normal CP the
+    /// predictive mean is also the location `muhat0` (reference `norm.py`:
+    /// `rh_mean = v1hat`).
+    pub cp_mean: f64,
 }
 
 /// Fit a `norm_p1` model and build the **analytic** CP prediction result.
@@ -433,6 +487,11 @@ pub fn predict_norm_p1(model: &crate::models::NormalP1, req: &PredictionRequest)
         adjustedx,
         ml_value,
         muhat0,
+        // A1: for the analytic normal CP the predictive mean is the location
+        // `muhat0` for both the MLE and the CP (reference `norm.py`:
+        // `ml_mean = v1hat`, `rh_mean = v1hat`).
+        ml_mean: muhat0,
+        cp_mean: muhat0,
     }
 }
 
@@ -491,6 +550,12 @@ pub fn predict_gev_p1(
 
     let maic = mle.loglik - mle.n_params as f64;
 
+    // A1: MLE and CP predictive means (reference `gev_p1_means`). As for the
+    // homogeneous GEV, the reference reports `rh_flat_mean = inf`, so `cp_mean`
+    // is `+inf`; `ml_mean` is the analytic MLE mean.
+    let (ml_mean, _cp_mean_dmgs) = integ.cp_mean(&mle.ml_params, &req.y);
+    let cp_mean = f64::INFINITY;
+
     FitResult {
         ml_pdf,
         cp_pdf,
@@ -502,8 +567,15 @@ pub fn predict_gev_p1(
         cp_se: mle.ml_se.clone(),
         aic: mle.aic,
         maic,
+        loglik: mle.loglik,
         waic: None,
         log_scores: None,
+        ml_mean,
+        cp_mean,
+        waic1: None,
+        waic2: None,
+        ml_oos_logscore: None,
+        cp_oos_logscore: None,
         convergence: mle.convergence,
         small_n: mle.small_n,
     }
@@ -567,6 +639,49 @@ mod tests {
     }
 
     #[test]
+    fn predict_populates_ml_and_cp_means() {
+        // A1: the normal predictive mean is the fitted location `mu` for both
+        // the MLE and the CP (reference `norm.py`: ml_mean = rh_mean = v1hat).
+        use crate::models::Normal;
+        let y = vec![0.3, -1.2, 2.4, 0.9, -0.5, 1.7, -2.1, 0.0, 1.1, -0.8];
+        let req = PredictionRequest {
+            y: y.clone(),
+            x: vec![-1.0, 0.0, 1.0],
+            p: vec![0.25, 0.5, 0.75],
+            t: None,
+            t0: None,
+            n0: None,
+            means: None,
+        };
+        let r = predict(Normal, &req, &[0.0, 1.0]);
+        let mean = y.iter().sum::<f64>() / y.len() as f64;
+        assert!((r.ml_mean - mean).abs() < 1e-6, "ml_mean {}", r.ml_mean);
+        // The CP mean is the MLE mean plus an O(1/n) DMGS correction.
+        assert!((r.cp_mean - mean).abs() < 0.1, "cp_mean {}", r.cp_mean);
+        assert!(r.ml_mean.is_finite() && r.cp_mean.is_finite());
+    }
+
+    #[test]
+    fn predict_gev_reports_infinite_cp_mean() {
+        // A1: the reference `gev_means` reports `rh_flat_mean = inf`, so the GEV
+        // CP mean is +inf while the MLE mean is finite.
+        use crate::models::GenExtreme;
+        let y = vec![1.02, 1.55, 1.31, 1.88, 1.12, 1.67, 1.44, 1.21, 1.95, 1.38];
+        let req = PredictionRequest {
+            y,
+            x: vec![1.0, 1.3, 1.6],
+            p: vec![0.25, 0.5, 0.75],
+            t: None,
+            t0: None,
+            n0: None,
+            means: None,
+        };
+        let r = predict_gev(GenExtreme, &req, &[1.4, 0.3, -0.1], 0.01);
+        assert!(r.ml_mean.is_finite(), "ml_mean {}", r.ml_mean);
+        assert!(r.cp_mean.is_infinite() && r.cp_mean > 0.0, "cp_mean {}", r.cp_mean);
+    }
+
+    #[test]
     fn convergence_predicate() {
         assert!(Convergence::Converged.is_converged());
         assert!(!Convergence::Failed.is_converged());
@@ -587,8 +702,15 @@ mod tests {
             cp_se: vec![0.1, 0.1],
             aic: 10.0,
             maic: 11.0,
+            loglik: -5.0,
             waic: None,
             log_scores: None,
+            ml_mean: 0.0,
+            cp_mean: 0.0,
+            waic1: None,
+            waic2: None,
+            ml_oos_logscore: None,
+            cp_oos_logscore: None,
             convergence: Convergence::Converged,
             small_n: false,
         };

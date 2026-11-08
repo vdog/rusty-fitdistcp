@@ -1,9 +1,18 @@
 #!/usr/bin/env python3
 """Cross-language performance comparison — results aggregator (Group D).
 
-Merges the CSV outputs of the three harnesses (``rust``, ``ref_r``,
-``py_module``) into a single Markdown table plus a combined CSV, as described in
-``crates/fitdistcp-core/benches/PERF_COMPARISON.md``.
+Merges the CSV outputs of the four harnesses (``rust``, ``ref_r``,
+``py_module``, ``rust_binding``) into a single Markdown table plus a combined
+CSV, as described in ``crates/fitdistcp-core/benches/PERF_COMPARISON.md``.
+
+The four implementations are:
+
+* ``rust`` — the Rust port, calling the core directly.
+* ``ref_r`` — the reference R package.
+* ``py_module`` — the vendored reference Python package (pure Python).
+* ``rust_binding`` — the Rust-backed Python drop-in binding (compiled Rust
+  behind a Python boundary; the drop-in replacement for the reference Python
+  package).
 
 Input CSV schema (one file per implementation)::
 
@@ -14,8 +23,8 @@ Outputs (paths fixed by the spec):
 * ``crates/fitdistcp-core/benches/perf_comparison_results.csv``
 * ``crates/fitdistcp-core/benches/perf_comparison_results.md`` — one row per
   ``(model, operation, n)`` with columns ``Rust``, ``Reference R``,
-  ``Python module``, and ``R/Rust``, ``Py/Rust`` ratios (computed from the
-  ``median_ns`` values).
+  ``Python module``, ``Rust binding``, and ``R/Rust``, ``Py/Rust``,
+  ``RustBinding/Rust`` ratios (computed from the ``median_ns`` values).
 
 The Markdown output is prefixed with an environment-capture header (host, image
 tag, Rust/R/Python versions, CPU count, and the git SHAs of the workspace and the
@@ -30,10 +39,11 @@ Usage::
 
     python3 tools/bench/aggregate_perf.py \\
         [--rust <path>] [--ref-r <path>] [--ref-py <path>] \\
+        [--rust-binding <path>] \\
         [--out-md <path>] [--out-csv <path>] \\
         [--workspace <dir>] [--ref-r-repo <dir>] [--ref-py-repo <dir>]
 
-Defaults point at ``tools/bench/out/`` for the three input CSVs and at the
+Defaults point at ``tools/bench/out/`` for the four input CSVs and at the
 committed ``crates/fitdistcp-core/benches/`` paths for the two outputs.
 """
 
@@ -52,13 +62,14 @@ from typing import Dict, List, Optional, Sequence, Tuple
 # Configuration
 # ---------------------------------------------------------------------------
 
-#: Default directory holding the three harness CSV outputs.
+#: Default directory holding the four harness CSV outputs.
 DEFAULT_OUT_DIR = "tools/bench/out"
 
 #: Default input CSV paths (one per implementation).
 DEFAULT_RUST_CSV = os.path.join(DEFAULT_OUT_DIR, "perf_rust.csv")
 DEFAULT_REF_R_CSV = os.path.join(DEFAULT_OUT_DIR, "perf_ref_r.csv")
 DEFAULT_REF_PY_CSV = os.path.join(DEFAULT_OUT_DIR, "perf_py.csv")
+DEFAULT_RUST_BINDING_CSV = os.path.join(DEFAULT_OUT_DIR, "perf_rust_binding.csv")
 
 #: Default output paths (fixed by PERF_COMPARISON.md §7).
 DEFAULT_OUT_MD = "crates/fitdistcp-core/benches/perf_comparison_results.md"
@@ -69,12 +80,13 @@ DEFAULT_WORKSPACE = "."
 DEFAULT_REF_R_REPO = "tools/fitdistcp-ref"
 DEFAULT_REF_PY_REPO = "tools/fitdistcp-py-ref"
 
-#: The three implementations, in display order, keyed by their CSV
+#: The four implementations, in display order, keyed by their CSV
 #: ``implementation`` value.
 IMPLEMENTATIONS: Tuple[Tuple[str, str], ...] = (
     ("rust", "Rust"),
     ("ref_r", "Reference R"),
     ("py_module", "Python module"),
+    ("rust_binding", "Rust binding"),
 )
 
 #: Canonical ordering of models and operations for a stable table.
@@ -296,18 +308,43 @@ def build_rows(
     rust: Dict[Tuple[str, str, str, int], int],
     ref_r: Dict[Tuple[str, str, str, int], int],
     ref_py: Dict[Tuple[str, str, str, int], int],
-) -> List[Tuple[Tuple[str, str, int], Optional[int], Optional[int], Optional[int]]]:
-    """Pivot the three maps into one row per ``(model, operation, n)``."""
-    keys = set(rust) | set(ref_r) | set(ref_py)
+    rust_binding: Dict[Tuple[str, str, str, int], int],
+) -> List[
+    Tuple[
+        Tuple[str, str, int],
+        Optional[int],
+        Optional[int],
+        Optional[int],
+        Optional[int],
+    ]
+]:
+    """Pivot the four maps into one row per ``(model, operation, n)``."""
+    keys = set(rust) | set(ref_r) | set(ref_py) | set(rust_binding)
     rows = []
     for key in sorted(keys, key=sort_key):
-        rows.append((key, rust.get(key), ref_r.get(key), ref_py.get(key)))
+        rows.append(
+            (
+                key,
+                rust.get(key),
+                ref_r.get(key),
+                ref_py.get(key),
+                rust_binding.get(key),
+            )
+        )
     return rows
 
 
 def render_markdown(
     env: List[Tuple[str, str]],
-    rows: List[Tuple[Tuple[str, str, int], Optional[int], Optional[int], Optional[int]]],
+    rows: List[
+        Tuple[
+            Tuple[str, str, int],
+            Optional[int],
+            Optional[int],
+            Optional[int],
+            Optional[int],
+        ]
+    ],
     present: Dict[str, bool],
 ) -> str:
     """Render the full Markdown document (header + table + notes)."""
@@ -316,7 +353,7 @@ def render_markdown(
     lines.append("")
     lines.append(
         "Generated by [`tools/bench/aggregate_perf.py`](../../../tools/bench/aggregate_perf.py) "
-        "from the three harness CSVs. Workload and methodology are defined in "
+        "from the four harness CSVs. Workload and methodology are defined in "
         "[`PERF_COMPARISON.md`](PERF_COMPARISON.md)."
     )
     lines.append("")
@@ -350,20 +387,23 @@ def render_markdown(
     lines.append("")
     lines.append(
         "| Model | Operation | n | Rust (ns) | Reference R (ns) | "
-        "Python module (ns) | R/Rust | Py/Rust |"
+        "Python module (ns) | Rust binding (ns) | R/Rust | Py/Rust | "
+        "RustBinding/Rust |"
     )
-    lines.append("|---|---|---|---|---|---|---|---|")
-    for (model, operation, n), rust_ns, ref_ns, py_ns in rows:
+    lines.append("|---|---|---|---|---|---|---|---|---|---|")
+    for (model, operation, n), rust_ns, ref_ns, py_ns, rb_ns in rows:
         lines.append(
-            "| {} | {} | {} | {} | {} | {} | {} | {} |".format(
+            "| {} | {} | {} | {} | {} | {} | {} | {} | {} | {} |".format(
                 model,
                 operation,
                 n,
                 format_ns(rust_ns),
                 format_ns(ref_ns),
                 format_ns(py_ns),
+                format_ns(rb_ns),
                 format_ratio(ref_ns, rust_ns),
                 format_ratio(py_ns, rust_ns),
+                format_ratio(rb_ns, rust_ns),
             )
         )
     lines.append("")
@@ -409,18 +449,35 @@ def render_markdown(
         "sample and divides by the batch size. Sub-millisecond workloads are "
         "therefore quantized to roughly 1 ms / batch_size."
     )
+    lines.append(
+        "8. **Rust binding boundary.** The Rust binding is compiled Rust behind "
+        "a Python boundary (the drop-in replacement for the reference Python "
+        "package). Its numbers should sit between the pure-Rust core (`rust`) "
+        "and the pure-Python reference (`py_module`): the Python↔Rust call and "
+        "marshalling overhead is the gap to `rust`, while the compiled core is "
+        "the gap to `py_module`."
+    )
     lines.append("")
     return "\n".join(lines)
 
 
 def render_csv(
-    rows: List[Tuple[Tuple[str, str, int], Optional[int], Optional[int], Optional[int]]],
+    rows: List[
+        Tuple[
+            Tuple[str, str, int],
+            Optional[int],
+            Optional[int],
+            Optional[int],
+            Optional[int],
+        ]
+    ],
 ) -> str:
     """Render the combined CSV (one row per ``(model, operation, n)``)."""
     out_lines = [
-        "model,operation,n,rust_ns,ref_r_ns,py_module_ns,r_over_rust,py_over_rust"
+        "model,operation,n,rust_ns,ref_r_ns,py_module_ns,rust_binding_ns,"
+        "r_over_rust,py_over_rust,rust_binding_over_rust"
     ]
-    for (model, operation, n), rust_ns, ref_ns, py_ns in rows:
+    for (model, operation, n), rust_ns, ref_ns, py_ns, rb_ns in rows:
         r_ratio = (
             "{:.6f}".format(ref_ns / rust_ns)
             if ref_ns is not None and rust_ns not in (None, 0)
@@ -431,16 +488,23 @@ def render_csv(
             if py_ns is not None and rust_ns not in (None, 0)
             else ""
         )
+        rb_ratio = (
+            "{:.6f}".format(rb_ns / rust_ns)
+            if rb_ns is not None and rust_ns not in (None, 0)
+            else ""
+        )
         out_lines.append(
-            "{},{},{},{},{},{},{},{}".format(
+            "{},{},{},{},{},{},{},{},{},{}".format(
                 model,
                 operation,
                 n,
                 "" if rust_ns is None else rust_ns,
                 "" if ref_ns is None else ref_ns,
                 "" if py_ns is None else py_ns,
+                "" if rb_ns is None else rb_ns,
                 r_ratio,
                 py_ratio,
+                rb_ratio,
             )
         )
     return "\n".join(out_lines) + "\n"
@@ -453,12 +517,17 @@ def render_csv(
 
 def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Aggregate the three cross-language harness CSVs into a "
+        description="Aggregate the four cross-language harness CSVs into a "
         "Markdown table + combined CSV (Group D)."
     )
     parser.add_argument("--rust", default=DEFAULT_RUST_CSV, help="Rust harness CSV")
     parser.add_argument("--ref-r", default=DEFAULT_REF_R_CSV, help="Reference R harness CSV")
     parser.add_argument("--ref-py", default=DEFAULT_REF_PY_CSV, help="Python module harness CSV")
+    parser.add_argument(
+        "--rust-binding",
+        default=DEFAULT_RUST_BINDING_CSV,
+        help="Rust-backed Python binding harness CSV",
+    )
     parser.add_argument("--out-md", default=DEFAULT_OUT_MD, help="output Markdown path")
     parser.add_argument("--out-csv", default=DEFAULT_OUT_CSV, help="output CSV path")
     parser.add_argument("--workspace", default=DEFAULT_WORKSPACE, help="workspace git repo dir")
@@ -473,16 +542,18 @@ def main(argv: Sequence[str]) -> int:
     rust = parse_csv(args.rust)
     ref_r = parse_csv(args.ref_r)
     ref_py = parse_csv(args.ref_py)
+    rust_binding = parse_csv(args.rust_binding)
 
     present = {
         "rust": bool(rust),
         "ref_r": bool(ref_r),
         "py_module": bool(ref_py),
+        "rust_binding": bool(rust_binding),
     }
     if not any(present.values()):
         warn("no input CSVs contained any rows; writing an empty results table")
 
-    rows = build_rows(rust, ref_r, ref_py)
+    rows = build_rows(rust, ref_r, ref_py, rust_binding)
     env = capture_environment(args.workspace, args.ref_r_repo, args.ref_py_repo)
 
     md = render_markdown(env, rows, present)

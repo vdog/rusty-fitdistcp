@@ -5,9 +5,10 @@
 # One-command runner for the cross-language performance comparison (Group D).
 #
 # It builds the Rust port, installs both reference implementations (R deps via
-# Posit Public Package Manager; Python deps via pip), runs all three harnesses
-# writing CSVs to tools/bench/out/, then invokes the aggregator to produce the
-# committed results table.
+# Posit Public Package Manager; Python deps via pip), builds the Rust-backed
+# Python drop-in binding (via maturin), runs all four harnesses writing CSVs to
+# tools/bench/out/, then invokes the aggregator to produce the committed results
+# table.
 #
 # The project's single source of truth for toolchains is the Docker dev
 # container (see Dockerfile / docker-compose.yml). This script is therefore
@@ -29,6 +30,8 @@
 #   SKIP_BUILD=1        skip `cargo build --release`
 #   SKIP_R=1            skip the reference R stage (install + harness)
 #   SKIP_PY=1           skip the Python module stage (clone + install + harness)
+#   SKIP_RUST_BINDING=1 skip the Rust-backed Python binding stage
+#                       (maturin build + harness)
 #   SKIP_AGGREGATE=1    skip the final aggregation step
 #
 #   WARMUP=<n>          discarded warmup iterations (default: 3)
@@ -70,6 +73,7 @@ cd "${WORKSPACE_ROOT}"
 SKIP_BUILD="${SKIP_BUILD:-0}"
 SKIP_R="${SKIP_R:-0}"
 SKIP_PY="${SKIP_PY:-0}"
+SKIP_RUST_BINDING="${SKIP_RUST_BINDING:-0}"
 SKIP_AGGREGATE="${SKIP_AGGREGATE:-0}"
 
 WARMUP="${WARMUP:-3}"
@@ -92,6 +96,7 @@ OUT_DIR="${OUT_DIR:-tools/bench/out}"
 RUST_CSV="${OUT_DIR}/perf_rust.csv"
 REF_R_CSV="${OUT_DIR}/perf_ref_r.csv"
 REF_PY_CSV="${OUT_DIR}/perf_py.csv"
+RUST_BINDING_CSV="${OUT_DIR}/perf_rust_binding.csv"
 
 # --- Helpers ----------------------------------------------------------------
 
@@ -115,7 +120,7 @@ info "workspace root : ${WORKSPACE_ROOT}"
 info "output dir     : ${OUT_DIR}"
 info "fixture        : ${INPUTS}"
 info "warmup/repeats : ${WARMUP}/${REPEATS}"
-info "skip flags     : build=${SKIP_BUILD} r=${SKIP_R} py=${SKIP_PY} aggregate=${SKIP_AGGREGATE}"
+info "skip flags     : build=${SKIP_BUILD} r=${SKIP_R} py=${SKIP_PY} rust_binding=${SKIP_RUST_BINDING} aggregate=${SKIP_AGGREGATE}"
 
 if [[ ! -f "${INPUTS}" ]]; then
   warn "fixture not found at '${INPUTS}'; the harnesses will fail."
@@ -129,15 +134,15 @@ export FITDISTCP_IMAGE_TAG="${FITDISTCP_IMAGE_TAG:-fitdistcp-dev:latest}"
 # --- Stage 1: build the Rust port -------------------------------------------
 
 if [[ "${SKIP_BUILD}" == "1" ]]; then
-  log "Stage 1/5: build Rust port — SKIPPED (SKIP_BUILD=1)"
+  log "Stage 1/6: build Rust port — SKIPPED (SKIP_BUILD=1)"
 else
-  log "Stage 1/5: build Rust port (cargo build --release)"
+  log "Stage 1/6: build Rust port (cargo build --release)"
   cargo build --release -p fitdistcp-core --bin perf_timing
 fi
 
 # --- Stage 2: run the Rust harness ------------------------------------------
 
-log "Stage 2/5: run Rust harness -> ${RUST_CSV}"
+log "Stage 2/6: run Rust harness -> ${RUST_CSV}"
 if [[ "${SKIP_BUILD}" == "1" && ! -x "target/release/perf_timing" ]]; then
   warn "SKIP_BUILD=1 but target/release/perf_timing is missing; skipping Rust harness."
 else
@@ -148,9 +153,9 @@ fi
 # --- Stage 3: reference R ---------------------------------------------------
 
 if [[ "${SKIP_R}" == "1" ]]; then
-  log "Stage 3/5: reference R — SKIPPED (SKIP_R=1)"
+  log "Stage 3/6: reference R — SKIPPED (SKIP_R=1)"
 else
-  log "Stage 3/5: reference R (install deps + harness)"
+  log "Stage 3/6: reference R (install deps + harness)"
   if [[ ! -d "${R_REF_DIR}/R" ]]; then
     warn "reference R package not found at '${R_REF_DIR}/R'; skipping the R stage."
     warn "  Clone it with:"
@@ -187,9 +192,9 @@ fi
 # --- Stage 4: Python module -------------------------------------------------
 
 if [[ "${SKIP_PY}" == "1" ]]; then
-  log "Stage 4/5: Python module — SKIPPED (SKIP_PY=1)"
+  log "Stage 4/6: Python module — SKIPPED (SKIP_PY=1)"
 else
-  log "Stage 4/5: Python module (clone + install deps + harness)"
+  log "Stage 4/6: Python module (clone + install deps + harness)"
 
   # Clone the reference module if it is not already present. The clone is
   # best-effort: if it fails we warn and skip the Python stage rather than
@@ -228,22 +233,77 @@ else
   fi
 fi
 
-# --- Stage 5: aggregate -----------------------------------------------------
+# --- Stage 5: Rust-backed Python binding ------------------------------------
+
+if [[ "${SKIP_RUST_BINDING}" == "1" ]]; then
+  log "Stage 5/6: Rust binding — SKIPPED (SKIP_RUST_BINDING=1)"
+else
+  log "Stage 5/6: Rust binding (maturin build + harness)"
+
+  # The drop-in binding lives in crates/fitdistcp-py and is built with maturin.
+  # This stage is best-effort: if maturin or the binding is unavailable we warn
+  # and skip it rather than aborting the whole run (mirroring the Python stage).
+  binding_available=1
+  if [[ ! -d "crates/fitdistcp-py" ]]; then
+    warn "the drop-in binding crate 'crates/fitdistcp-py' was not found; skipping the Rust binding stage."
+    binding_available=0
+  elif ! command -v maturin >/dev/null 2>&1; then
+    warn "maturin is not available on PATH; skipping the Rust binding stage."
+    warn "  Install it inside the dev container (e.g. 'pip install maturin')."
+    binding_available=0
+  fi
+
+  if [[ "${binding_available}" == "1" ]]; then
+    # Build + install the binding into the active environment. `maturin develop`
+    # requires a virtualenv; fall back to `maturin build` + pip install of the
+    # produced wheel when no venv is active. Both run INSIDE the container.
+    info "building the drop-in binding (maturin) from crates/fitdistcp-py"
+    if (cd crates/fitdistcp-py && maturin develop --release); then
+      info "maturin develop succeeded"
+    else
+      warn "maturin develop failed; trying 'maturin build --release' + pip install."
+      if (cd crates/fitdistcp-py && maturin build --release); then
+        wheel="$(ls -t crates/fitdistcp-py/target/wheels/*.whl 2>/dev/null | head -n1 || true)"
+        if [[ -n "${wheel}" ]]; then
+          python3 -m pip install --no-cache-dir --break-system-packages --force-reinstall "${wheel}" \
+            || warn "pip install of the binding wheel failed; the harness may fail."
+        else
+          warn "no wheel found under crates/fitdistcp-py/target/wheels; skipping the Rust binding stage."
+          binding_available=0
+        fi
+      else
+        warn "maturin build failed; skipping the Rust binding stage."
+        binding_available=0
+      fi
+    fi
+  fi
+
+  if [[ "${binding_available}" == "1" ]]; then
+    info "running Rust binding harness -> ${RUST_BINDING_CSV}"
+    PYTHONPATH="${WORKSPACE_ROOT}/${PY_LIB}" python3 tools/bench/bench_ref_py.py \
+      --impl rust \
+      --out "${RUST_BINDING_CSV}" --warmup "${WARMUP}" --repeats "${REPEATS}" --inputs "${INPUTS}" \
+      || warn "Rust binding harness failed; continuing without Rust binding results."
+  fi
+fi
+
+# --- Stage 6: aggregate -----------------------------------------------------
 
 if [[ "${SKIP_AGGREGATE}" == "1" ]]; then
-  log "Stage 5/5: aggregate — SKIPPED (SKIP_AGGREGATE=1)"
+  log "Stage 6/6: aggregate — SKIPPED (SKIP_AGGREGATE=1)"
 else
-  log "Stage 5/5: aggregate results"
+  log "Stage 6/6: aggregate results"
   python3 tools/bench/aggregate_perf.py \
     --rust "${RUST_CSV}" \
     --ref-r "${REF_R_CSV}" \
     --ref-py "${REF_PY_CSV}" \
+    --rust-binding "${RUST_BINDING_CSV}" \
     --workspace "${WORKSPACE_ROOT}" \
     --ref-r-repo "${R_REF_DIR}" \
     --ref-py-repo "${PY_REF_DIR}"
 fi
 
 log "Done"
-info "CSVs   : ${RUST_CSV} ${REF_R_CSV} ${REF_PY_CSV}"
+info "CSVs   : ${RUST_CSV} ${REF_R_CSV} ${REF_PY_CSV} ${RUST_BINDING_CSV}"
 info "results: crates/fitdistcp-core/benches/perf_comparison_results.md"
 info "results: crates/fitdistcp-core/benches/perf_comparison_results.csv"

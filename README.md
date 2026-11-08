@@ -21,10 +21,11 @@ Phase 1 (the standard DMGS asymptotic-expansion integration path) is
 - **Core numerics** — special functions, MLE fitting, analytic-first
   derivatives, DMGS expansion, and 10 models are implemented in
   `fitdistcp-core`.
-- **Bindings** — R (53 exported functions) and Python (40 exported functions)
-  are complete, with predictor handling for `norm_p1` / `genextreme_p1`.
+- **Bindings** — R (53 exported functions) and Python (submodule API, a drop-in
+  replacement for the reference `fitdistcp` v0.0.4 Python package) are complete,
+  with predictor handling for `norm_p1` / `genextreme_p1`.
 - **Tests** — 144 core unit tests + 17 golden/integration tests + 141 R testthat
-  assertions + 27 Python pytest tests, all passing.
+  assertions + 109 Python pytest tests (1 skipped), all passing.
 - **Quality gates** — `cargo clippy --workspace --all-targets -- -D warnings`
   and `cargo fmt --check` are clean.
 - **Packaging** — `R CMD build`/`INSTALL`/`check` succeeds (1 WARNING + 1 NOTE,
@@ -62,7 +63,9 @@ fitdistcp/
 │   │   ├── configure, configure.win # vendored-crate build hooks
 │   │   └── cran-comments.md
 │   └── fitdistcp-py/                # PyO3 binding (maturin)
-│       ├── src/lib.rs
+│       ├── src/lib.rs               # private extension module (fitdistcp._fitdistcp)
+│       ├── python/fitdistcp/        # public submodule API (norm, genextreme, ...)
+│       ├── tests/                   # pytest suite (drop-in compat, golden, examples)
 │       └── pyproject.toml           # maturin + cibuildwheel config
 ├── tests/golden/                    # committed golden fixtures + tolerance policy
 │   ├── mle_golden.json
@@ -110,20 +113,32 @@ Plus the shared helpers `core_version`, `add_vectors`, `sum_values`,
 `fitdistcp_params`. The package uses the `rextendr` layout; `NAMESPACE` and 53
 man pages are generated, and `DESCRIPTION` is finalized for CRAN.
 
-### Python binding (`crates/fitdistcp-py`) — 40 exported functions
+### Python binding (`crates/fitdistcp-py`) — drop-in submodule API
 
-For each of the 10 models, the `pdf/cdf/ppf/rvs` family:
+The Python binding is a **drop-in replacement** for the reference `fitdistcp`
+v0.0.4 Python package (vendored read-only at
+[`tools/fitdistcp-py-ref/`](tools/fitdistcp-py-ref/fitdistcp/__init__.py:1)). The
+compiled extension module is private (`fitdistcp._fitdistcp`); the public surface
+is the **submodule API**, mirroring the reference:
 
-- `norm_pdf`, `norm_cdf`, `norm_ppf`, `norm_rvs`
-- `norm_p1_pdf`, `norm_p1_cdf`, `norm_p1_ppf`, `norm_p1_rvs`
-- `gev_pdf`, `gev_cdf`, `gev_ppf`, `gev_rvs`
-- `gev_p1_pdf`, `gev_p1_cdf`, `gev_p1_ppf`, `gev_p1_rvs`
-- `gpd_pdf`, `gpd_cdf`, `gpd_ppf`, `gpd_rvs`
-- `gumbel_pdf`, `gumbel_cdf`, `gumbel_ppf`, `gumbel_rvs`
-- `lnorm_pdf`, `lnorm_cdf`, `lnorm_ppf`, `lnorm_rvs`
-- `weibull_pdf`, `weibull_cdf`, `weibull_ppf`, `weibull_rvs`
-- `gamma_pdf`, `gamma_cdf`, `gamma_ppf`, `gamma_rvs`
-- `expon_pdf`, `expon_cdf`, `expon_ppf`, `expon_rvs`
+```python
+import fitdistcp
+
+fitdistcp.norm.ppf([1.0, 2.0, 3.0], p=[0.1, 0.5, 0.9])
+fitdistcp.genextreme.ppf(x, p=0.5)
+fitdistcp.genpareto.pdf(x, y)
+fitdistcp.reltest(x)
+```
+
+Each submodule (`norm`, `genextreme`, `genpareto`, `expon`, `gamma`, `gumbel`,
+`lnorm`, `weibull`, `genextreme_p1`, `reltest`) exposes `ppf` / `pdf` / `cdf` /
+`rvs` (and `reltest` where applicable) with the reference signatures, defaults,
+and return-dict keys.
+
+The previous **flat API** (`fitdistcp.ppf_norm`, `fitdistcp.pdf_gev`, ...) is
+retained as **deprecated aliases**: accessing a flat name emits a
+`DeprecationWarning` (module-level `__getattr__`) and forwards to the
+corresponding submodule function.
 
 Built with PyO3 + maturin; `cibuildwheel` configuration lives in
 [`pyproject.toml`](crates/fitdistcp-py/pyproject.toml).
@@ -207,6 +222,11 @@ package vs the Python module is committed in
 the workload and methodology are defined in
 [`PERF_COMPARISON.md`](crates/fitdistcp-core/benches/PERF_COMPARISON.md).
 Regenerate it with [`tools/run-perf-comparison.sh`](tools/run-perf-comparison.sh).
+
+The Python bench harness [`tools/bench/bench_ref_py.py`](tools/bench/bench_ref_py.py:1)
+supports `--impl {ref,rust}` (or the `BENCH_IMPL` environment variable): `ref`
+benchmarks the vendored reference package (`implementation = "py_module"`) and
+`rust` benchmarks the drop-in binding (`implementation = "rust_binding"`).
 
 ## Golden fixtures & tolerance policy
 
@@ -293,19 +313,20 @@ bugs:
 - **GEV third derivatives remain numerical.** The reference's `gev_logfddd` is a
   ~180-line machine-generated expression, impractical to transcribe; the port
   uses the numerical fallback behind the `Derivatives` trait.
-- **`norm_p1` sigma convention.** The reference reports the unbiased `n − 1`
-  estimate; the Rust port reports the true MLE (`n`).
 - **Small-n handling.** DMGS degrades below `n ≈ 10`; the port flags small-n
   results rather than silently degrading, and the golden tolerance is relaxed
   for `n < 10` (see `TOLERANCE.md`).
+
+The Python binding is a **drop-in replacement** for the reference `fitdistcp`
+v0.0.4 Python package (submodule API), with the flat API retained as deprecated
+aliases.
 
 ### Phase 2 (deferred)
 
 The following are **not** implemented in Phase 1 and are explicitly deferred:
 
-- `t***_cp` posterior sampling (Northrop `rust` interop).
-- WAIC / log scores.
-- Two-predictor GEV (`qgev_p12_cp`).
+- `t***_cp` posterior sampling (Northrop `rust` interop) / real `ru`.
+- Two-predictor GEV (`genextreme_p12`).
 
 ## Roadmap
 
@@ -316,4 +337,4 @@ The following are **not** implemented in Phase 1 and are explicitly deferred:
 - **Phase 1d** — bindings (R `d/p/q/r` + `t***_cp`, Python `pdf/cdf/ppf/rvs`) ✅
 - **Phase 1e** — performance (benchmarks, hot-loop optimizations) ✅
 - **Phase 1f** — validation, golden fixtures, CI, packaging ✅
-- **Phase 2** — posterior sampling, WAIC/log scores, two-predictor GEV (deferred)
+- **Phase 2** — posterior sampling / real `ru`, two-predictor GEV (deferred)

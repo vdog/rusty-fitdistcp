@@ -1,0 +1,43 @@
+"""Gumbel distribution predictions based on a calibrating prior.
+
+Drop-in replacement for the reference ``fitdistcp.gumbel`` submodule.
+"""
+
+import numpy as np
+
+from . import _fitdistcp
+
+
+def ppf(x, p=np.arange(0.1, 1.0, 0.1),
+        means=False, waicscores=False, logscores=False,
+        dmgs=True, ru=False, ru_nsamples=100000,
+        debug=False):
+    """Gumbel CP predictive quantiles (reference ``gumbel.ppf``)."""
+    return _fitdistcp.ppf_gumbel_ref(
+        np.asarray(x, dtype=float), np.asarray(p, dtype=float),
+        means=means, waicscores=waicscores, logscores=logscores,
+        dmgs=dmgs, ru=ru, ru_nsamples=ru_nsamples,
+    )
+
+
+def rvs(n, x, ru=False, mlcp=True, debug=False):
+    """Gumbel CP random deviates (reference ``gumbel.rvs``)."""
+    return _fitdistcp.rvs_gumbel_ref(
+        int(n), np.asarray(x, dtype=float), ru=ru, mlcp=mlcp,
+    )
+
+
+def pdf(x, y=None, ru=False, ru_nsamples=1000, debug=False):
+    """Gumbel CP predictive density (reference ``gumbel.pdf``)."""
+    y = None if y is None else np.asarray(y, dtype=float)
+    return _fitdistcp.pdf_gumbel_ref(
+        np.asarray(x, dtype=float), y, ru=ru, ru_nsamples=ru_nsamples,
+    )
+
+
+def cdf(x, y=None, ru=False, ru_nsamples=1000, debug=False):
+    """Gumbel CP predictive CDF (reference ``gumbel.cdf``)."""
+    y = None if y is None else np.asarray(y, dtype=float)
+    return _fitdistcp.cdf_gumbel_ref(
+        np.asarray(x, dtype=float), y, ru=ru, ru_nsamples=ru_nsamples,
+    )

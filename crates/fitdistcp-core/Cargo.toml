@@ -22,6 +22,12 @@ statrs = { workspace = true }
 nalgebra = { workspace = true }
 argmin = { workspace = true }
 rayon = { workspace = true }
+# W18/A4: `rand`/`rand_distr` drive the `reltest` reliability simulation
+# (fixed-seed Monte Carlo). These are **normal** dependencies (not dev-only)
+# because `reltest` is a public core routine the bindings expose; the fixed-seed
+# entry point keeps the library deterministic for a given seed.
+rand = { workspace = true }
+rand_distr = { workspace = true }
 # Cross-language benchmark (Group B): the shared input fixture
 # `benches/perf_inputs.json` is parsed with serde_json. This is a *normal*
 # dependency (not dev-only) because the `perf_timing` binary under `src/bin/`

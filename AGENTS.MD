@@ -1,0 +1,1 @@
+Always use the docker container for development tools.  Do not attempt to install them or search for them on the host system. 

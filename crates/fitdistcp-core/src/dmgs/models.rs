@@ -222,6 +222,13 @@ impl DmgsModel for Normal {
         let d22 = -((e6 - 2.0) * e4 * e1 / e8);
         vec![d11, e7, e7, d22]
     }
+
+    /// Analytic mean derivatives (reference `norm.py`): `ml_mean = mu`,
+    /// `∂/∂mu = 1`, `∂/∂sigma = 0`, all second derivatives zero.
+    fn mean_derivs(&self, params: &[f64]) -> (f64, Vec<f64>, Vec<f64>) {
+        let mu = params[0];
+        (mu, vec![1.0, 0.0], vec![0.0, 0.0, 0.0, 0.0])
+    }
 }
 
 // --- norm_p1 ----------------------------------------------------------------
@@ -342,6 +349,20 @@ impl DmgsModel for NormalP1 {
             e12,
             -((e8 - 2.0) * e5 * e3 / e9),
         ]
+    }
+
+    /// Analytic mean derivatives (reference `norm_p1`): the predictive mean is
+    /// the location at the prediction point `muhat0 = beta0 + beta1·t0c`, so
+    /// `∂/∂beta0 = 1`, `∂/∂beta1 = t0c`, `∂/∂sigma = 0`, all second derivatives
+    /// zero.
+    fn mean_derivs(&self, params: &[f64]) -> (f64, Vec<f64>, Vec<f64>) {
+        let t = self.centered_prediction();
+        let muhat0 = params[0] + params[1] * t;
+        (
+            muhat0,
+            vec![1.0, t, 0.0],
+            vec![0.0; 9],
+        )
     }
 }
 
@@ -553,6 +574,49 @@ impl DmgsModel for GenExtreme {
             d13, d23, d33, // shape row
         ]
     }
+
+    /// Analytic mean derivatives (reference `genextreme_libs.py::gev_means`).
+    ///
+    /// For `shape == 0` (Gumbel limit): `ml_mean = mu + sigma·γ`,
+    /// `∂/∂mu = 1`, `∂/∂sigma = γ`, `∂/∂shape = 0`, all second derivatives zero.
+    ///
+    /// For `shape != 0`, with `g0 = Γ(1-ξ)`, `g1 = g0·ψ(1-ξ)`,
+    /// `g2 = (ψ₁(1-ξ)·g0² + g1²)/g0`:
+    /// `ml_mean = mu + sigma·(g0-1)/ξ`,
+    /// `∂/∂mu = 1`, `∂/∂sigma = (g0-1)/ξ`,
+    /// `∂/∂ξ = (1 - g0 - ξ·g1)·sigma/ξ²`,
+    /// `∂²/∂sigma∂ξ = (1 - g0 - ξ·g1)/ξ²`,
+    /// `∂²/∂ξ² = sigma·(-2 + 2g0 + 2ξ·g1 + ξ²·g2)/ξ³`.
+    fn mean_derivs(&self, params: &[f64]) -> (f64, Vec<f64>, Vec<f64>) {
+        use crate::special::{digamma, gamma, trigamma};
+        const EULER: f64 = 0.577_215_664_901_532_9;
+        let mu = params[0];
+        let sigma = params[1];
+        let xi = params[2];
+        let mut meand1 = vec![0.0; 3];
+        let mut meand2 = vec![0.0; 9];
+        let ml_mean;
+        if xi == 0.0 {
+            ml_mean = mu + sigma * EULER;
+            meand1[0] = 1.0;
+            meand1[1] = EULER;
+        } else {
+            let g0 = gamma(1.0 - xi);
+            let g1 = g0 * digamma(1.0 - xi);
+            let g2 = (trigamma(1.0 - xi) * g0 * g0 + g1 * g1) / g0;
+            ml_mean = mu + sigma * (g0 - 1.0) / xi;
+            meand1[0] = 1.0;
+            meand1[1] = (g0 - 1.0) / xi;
+            meand1[2] = (1.0 - g0 - xi * g1) * sigma / (xi * xi);
+            // meand2[1,2] = meand2[2,1] = (1 - g0 - xi*g1)/xi^2
+            let d12 = (1.0 - g0 - xi * g1) / (xi * xi);
+            meand2[5] = d12; // (1, 2)
+            meand2[7] = d12; // (2, 1)
+            meand2[8] = sigma * (-2.0 + 2.0 * g0 + 2.0 * xi * g1 + xi * xi * g2)
+                / (xi * xi * xi); // (2, 2)
+        }
+        (ml_mean, meand1, meand2)
+    }
 }
 
 // --- genextreme_p1 ----------------------------------------------------------
@@ -599,6 +663,46 @@ impl DmgsModel for GenExtremeP1 {
     fn log_prior_slope(&self, params: &[f64]) -> Vec<f64> {
         // Right-Haar prior on the scale (index 2).
         vec![0.0, 0.0, -1.0 / params[2], 0.0]
+    }
+
+    /// Analytic mean derivatives (reference `genextreme_p1_libs.py::gev_p1_means`).
+    ///
+    /// `ml_mean = ymn + slope·t0 + sigma·(g0-1)/xi` (or `+ sigma·γ` for xi=0),
+    /// where `t0` is the centered prediction point. The derivative array mirrors
+    /// the reference with the location/slope/scale/shape ordering.
+    fn mean_derivs(&self, params: &[f64]) -> (f64, Vec<f64>, Vec<f64>) {
+        use crate::special::{digamma, gamma, trigamma};
+        const EULER: f64 = 0.577_215_664_901_532_9;
+        let ymn = params[0];
+        let slope = params[1];
+        let sigma = params[2];
+        let xi = params[3];
+        let t0 = self.centered_prediction();
+        let mut meand1 = vec![0.0; 4];
+        let mut meand2 = vec![0.0; 16];
+        let ml_mean;
+        if xi == 0.0 {
+            ml_mean = ymn + slope * t0 + sigma * EULER;
+            meand1[0] = 1.0;
+            meand1[1] = t0;
+            meand1[2] = EULER;
+        } else {
+            let g0 = gamma(1.0 - xi);
+            let g1 = g0 * digamma(1.0 - xi);
+            let g2 = (trigamma(1.0 - xi) * g0 * g0 + g1 * g1) / g0;
+            ml_mean = ymn + slope * t0 + sigma * (g0 - 1.0) / xi;
+            meand1[0] = 1.0;
+            meand1[1] = t0;
+            meand1[2] = (g0 - 1.0) / xi;
+            meand1[3] = (1.0 - g0 - xi * g1) * sigma / (xi * xi);
+            // meand2[2,3] = meand2[3,2] = (1 - g0 - xi*g1)/xi^2
+            let d23 = (1.0 - g0 - xi * g1) / (xi * xi);
+            meand2[11] = d23; // (2, 3)
+            meand2[14] = d23; // (3, 2)
+            meand2[15] = sigma * (-2.0 + 2.0 * g0 + 2.0 * xi * g1 + xi * xi * g2)
+                / (xi * xi * xi); // (3, 3)
+        }
+        (ml_mean, meand1, meand2)
     }
 }
 
@@ -729,6 +833,27 @@ impl DmgsModel for GenPareto {
             / v3);
         vec![d11, d12, d21, d22]
     }
+
+    /// Analytic mean derivatives (reference `genpareto_libs.py::gpd_k1_means`,
+    /// location `kloc = 0`).
+    ///
+    /// `ml_mean = sigma/(1-xi)`, `∂/∂sigma = 1/(1-xi)`,
+    /// `∂/∂xi = sigma/(1-xi)²`, `∂²/∂sigma∂xi = 1/(1-xi)²`,
+    /// `∂²/∂xi² = -2·sigma/(1-xi)³`.
+    fn mean_derivs(&self, params: &[f64]) -> (f64, Vec<f64>, Vec<f64>) {
+        let sigma = params[0];
+        let xi = params[1];
+        let onemxi = 1.0 - xi;
+        let onemxisq = onemxi * onemxi;
+        let onemxicu = onemxisq * onemxi;
+        let ml_mean = sigma / onemxi;
+        let meand1 = vec![1.0 / onemxi, sigma / onemxisq];
+        let mut meand2 = vec![0.0; 4];
+        meand2[1] = 1.0 / onemxisq;
+        meand2[2] = 1.0 / onemxisq;
+        meand2[3] = -2.0 * sigma / onemxicu;
+        (ml_mean, meand1, meand2)
+    }
 }
 
 // --- gumbel -----------------------------------------------------------------
@@ -801,6 +926,16 @@ impl DmgsModel for Gumbel {
         let d11 = -(e5 * e3 * e6 / e9);
         let d22 = -((e8 - 2.0) * e3 * e6 * e1 / (v2 * v2 * v2));
         vec![d11, e10, e10, d22]
+    }
+
+    /// Analytic mean derivatives (reference `gumbel_libs.py::gumbel_means`):
+    /// `ml_mean = loc + scale·γ`, `∂/∂loc = 1`, `∂/∂scale = γ`, all second
+    /// derivatives zero.
+    fn mean_derivs(&self, params: &[f64]) -> (f64, Vec<f64>, Vec<f64>) {
+        const EULER: f64 = 0.577_215_664_901_532_9;
+        let loc = params[0];
+        let scale = params[1];
+        (loc + scale * EULER, vec![1.0, EULER], vec![0.0; 4])
     }
 }
 
@@ -878,6 +1013,29 @@ impl DmgsModel for LogNormal {
         let d11 = -(e5 * e2 / e9);
         let d22 = -((e7 - 2.0) * e5 * e2 / e9);
         vec![d11, e8, e8, d22]
+    }
+
+    /// Analytic mean derivatives (reference `lnorm.py`):
+    /// `ml_mean = exp(mu + sigma²/2)`. The reference reports
+    /// `rh_mean = "no analytic expression"`; we return the MLE mean and let the
+    /// DMGS correction supply the CP mean (the reference's `cp_mean` is a
+    /// placeholder string, so the numeric value here is the MLE mean plus the
+    /// DMGS correction, which is the natural numeric analogue).
+    ///
+    /// With `m = exp(mu + sigma²/2)`: `∂/∂mu = m`, `∂/∂sigma = m·sigma`,
+    /// `∂²/∂mu² = m`, `∂²/∂mu∂sigma = m·sigma`, `∂²/∂sigma² = m·(1+sigma²)`.
+    fn mean_derivs(&self, params: &[f64]) -> (f64, Vec<f64>, Vec<f64>) {
+        let mu = params[0];
+        let sigma = params[1];
+        let s2 = sigma * sigma;
+        let m = (mu + 0.5 * s2).exp();
+        let meand1 = vec![m, m * sigma];
+        let mut meand2 = vec![0.0; 4];
+        meand2[0] = m;
+        meand2[1] = m * sigma;
+        meand2[2] = m * sigma;
+        meand2[3] = m * (1.0 + s2);
+        (m, meand1, meand2)
     }
 }
 
@@ -988,6 +1146,34 @@ impl DmgsModel for Weibull {
                 / (v2 * v2 * v2));
         vec![d11, d12, d21, d22]
     }
+
+    /// Analytic mean derivatives (reference `weibull_libs.py::weibull_means`).
+    ///
+    /// With `f1 = 1 + 1/v1` (v1 = shape, v2 = scale):
+    /// `ml_mean = v2·Γ(f1)`,
+    /// `∂/∂v1 = -v2·Γ(f1)·ψ(f1)/v1²`, `∂/∂v2 = Γ(f1)`,
+    /// `∂²/∂v1² = v2·(Γ(f1)·ψ₁(f1)/v1² + 2·Γ(f1)·ψ(f1)/v1³)`,
+    /// `∂²/∂v1∂v2 = -Γ(f1)·ψ(f1)/v1²`, `∂²/∂v2² = 0`.
+    fn mean_derivs(&self, params: &[f64]) -> (f64, Vec<f64>, Vec<f64>) {
+        use crate::special::{digamma, gamma, trigamma};
+        let v1 = params[0];
+        let v2 = params[1];
+        let f1 = 1.0 + 1.0 / v1;
+        let iv12 = 1.0 / (v1 * v1);
+        let iv13 = 1.0 / (v1 * v1 * v1);
+        let g = gamma(f1);
+        let dg = digamma(f1);
+        let tg = trigamma(f1);
+        let ml_mean = v2 * g;
+        let meand1 = vec![-v2 * g * dg * iv12, g];
+        let mut meand2 = vec![0.0; 4];
+        meand2[0] = v2 * (g * tg * iv12 + 2.0 * g * dg * iv13);
+        let d01 = -g * dg * iv12;
+        meand2[1] = d01;
+        meand2[2] = d01;
+        meand2[3] = 0.0;
+        (ml_mean, meand1, meand2)
+    }
 }
 
 // --- gamma ------------------------------------------------------------------
@@ -1055,6 +1241,28 @@ impl DmgsModel for Gamma {
         let h12 = d_sl * j;
         let h22 = d_ll * j * j + d_scale * (2.0 / (rate * rate * rate));
         vec![h11, h12, h12, h22]
+    }
+
+    /// Analytic mean derivatives (reference `gamma_libs.py::gamma_means`).
+    ///
+    /// The reference uses `(shape, scale)` with `ml_mean = shape·scale`; the
+    /// core uses `(shape, rate)` with `scale = 1/rate`, so `ml_mean = shape/rate`.
+    /// In the rate parameterization:
+    /// `∂/∂shape = 1/rate`, `∂/∂rate = -shape/rate²`,
+    /// `∂²/∂shape∂rate = -1/rate²`, `∂²/∂rate² = 2·shape/rate³`.
+    fn mean_derivs(&self, params: &[f64]) -> (f64, Vec<f64>, Vec<f64>) {
+        let shape = params[0];
+        let rate = params[1];
+        let r2 = rate * rate;
+        let r3 = r2 * rate;
+        let ml_mean = shape / rate;
+        let meand1 = vec![1.0 / rate, -shape / r2];
+        let mut meand2 = vec![0.0; 4];
+        let d01 = -1.0 / r2;
+        meand2[1] = d01;
+        meand2[2] = d01;
+        meand2[3] = 2.0 * shape / r3;
+        (ml_mean, meand1, meand2)
     }
 }
 
@@ -1158,6 +1366,16 @@ impl DmgsModel for Exponential {
     fn cdf_second_derivs(&self, params: &[f64], x: f64) -> Vec<f64> {
         let v1 = params[0];
         vec![-(x * x * (-(v1 * x)).exp())]
+    }
+
+    /// Analytic mean derivatives (reference `expon`): the exponential mean is
+    /// the scale `1/rate`, so `ml_mean = 1/rate`, `∂/∂rate = -1/rate²`,
+    /// `∂²/∂rate² = 2/rate³`.
+    fn mean_derivs(&self, params: &[f64]) -> (f64, Vec<f64>, Vec<f64>) {
+        let rate = params[0];
+        let r2 = rate * rate;
+        let r3 = r2 * rate;
+        (1.0 / rate, vec![-1.0 / r2], vec![2.0 / r3])
     }
 }
 

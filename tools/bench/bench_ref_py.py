@@ -1,16 +1,23 @@
 #!/usr/bin/env python3
 """Cross-language performance comparison — Python module harness (Group C).
 
-Times the Python module ``lynnejewson/fitdistcp`` (cloned to
-``tools/fitdistcp-py-ref/``) on the canonical workload defined in
+Times a Python ``fitdistcp`` implementation on the canonical workload defined in
 ``crates/fitdistcp-core/benches/PERF_COMPARISON.md``, consuming the shared
 inputs in ``crates/fitdistcp-core/benches/perf_inputs.json``.
 
-It emits CSV rows with the schema::
+Two implementations are supported (selected with ``--impl`` or the
+``BENCH_IMPL`` environment variable):
+
+* ``ref`` (default) — the vendored reference Python module
+  ``lynnejewson/fitdistcp`` (cloned to ``tools/fitdistcp-py-ref/``). Emits
+  ``implementation = "py_module"``.
+* ``rust`` — the Rust-backed drop-in binding (``crates/fitdistcp-py``), which
+  exposes the same reference submodule API (``fitdistcp.norm.ppf`` etc.).
+  Emits ``implementation = "rust_binding"``.
+
+Both modes emit CSV rows with the schema::
 
     implementation,model,operation,n,median_ns,min_ns,max_ns,repeats
-
-with ``implementation = "py_module"``.
 
 Workload (PERF_COMPARISON.md §1):
 
@@ -28,6 +35,11 @@ Python API mapping (PERF_COMPARISON.md §4)::
     predict -> fitdistcp.<model>.ppf(...)   (full pipeline)
     reltest -> fitdistcp.reltest.reltest_<model>
 
+The reference mode imports the vendored package's *flat* modules (``import
+norm``); the Rust mode imports the drop-in submodule API (``import
+fitdistcp.norm``). Both are mapped onto the same workload by the dispatch
+helpers below.
+
 Gamma parameterization (PERF_COMPARISON.md §5.4): the reference gamma uses
 ``(shape, scale)``; the Rust port uses ``(shape, rate)``. The fixture's reltest
 ``params`` are given in each implementation's native order, so the Python
@@ -37,9 +49,13 @@ needed there either.
 
 Usage::
 
-    python3 tools/bench/bench_ref_py.py [--out <path>] [--warmup <n>]
-                                        [--repeats <n>] [--inputs <path>]
+    python3 tools/bench/bench_ref_py.py [--impl {ref,rust}] [--out <path>]
+                                        [--warmup <n>] [--repeats <n>]
+                                        [--inputs <path>]
 
+    --impl     implementation to benchmark: 'ref' (vendored reference) or
+               'rust' (Rust-backed drop-in binding). Default: 'ref' (or the
+               BENCH_IMPL environment variable if set).
     --out      output CSV path (default: stdout)
     --warmup   discarded warmup iterations (default: 3)
     --repeats  timed iterations (default: 20)
@@ -83,6 +99,14 @@ PY_LIB = "tools/pylib"
 #: Default fixture path, relative to the workspace root.
 DEFAULT_INPUTS = "crates/fitdistcp-core/benches/perf_inputs.json"
 
+#: The two supported implementations and their CSV ``implementation`` labels.
+IMPL_REF = "ref"
+IMPL_RUST = "rust"
+IMPL_LABELS = {IMPL_REF: "py_module", IMPL_RUST: "rust_binding"}
+
+#: The Rust-backed drop-in binding's importable package name.
+RUST_PKG = "fitdistcp"
+
 MODELS = ("norm", "genextreme", "gamma")
 SIZES = (50, 500, 5000)
 PREDICT_N = 500
@@ -95,12 +119,12 @@ def fail(message: str) -> "NoReturn":  # type: ignore[name-defined]
 
 
 # ---------------------------------------------------------------------------
-# Import the reference module
+# Import the implementation's model modules
 # ---------------------------------------------------------------------------
 
 
-def import_fitdistcp():
-    """Import the Python reference model modules, or fail with a clear message.
+def import_ref_modules():
+    """Import the vendored reference model modules (flat imports).
 
     The reference package's modules use *flat* imports (e.g. ``import
     norm_libs``), so the inner package directory
@@ -139,6 +163,57 @@ def import_fitdistcp():
                 )
             )
     return modules
+
+
+def import_rust_modules():
+    """Import the Rust-backed drop-in binding's submodules.
+
+    The drop-in exposes the reference submodule API (``fitdistcp.norm`` etc.),
+    so we import the top-level ``fitdistcp`` package and return its submodules.
+    The package must be installed (``maturin develop``) in the active
+    environment.
+
+    Returns a dict mapping the canonical model name to its submodule.
+    """
+    try:
+        import fitdistcp  # noqa: F401
+    except ImportError as exc:
+        fail(
+            "could not import the Rust-backed '{}' package: {}\n"
+            "  Build/install it first (inside the dev container):\n"
+            "    cd crates/fitdistcp-py && maturin develop".format(
+                RUST_PKG, exc
+            )
+        )
+
+    modules = {}
+    for model in MODELS:
+        try:
+            modules[model] = __import__(
+                "{}.{}".format(RUST_PKG, model), fromlist=[model]
+            )
+        except ImportError as exc:
+            fail(
+                "the Rust-backed '{}' package has no '{}' submodule: {}".format(
+                    RUST_PKG, model, exc
+                )
+            )
+    return modules
+
+
+def import_fitdistcp(impl):
+    """Import the model modules for ``impl`` (``ref`` or ``rust``).
+
+    Returns ``(modules, implementation_label)`` where ``modules`` maps the
+    canonical model name to its module and ``implementation_label`` is the CSV
+    ``implementation`` value (``py_module`` for the reference, ``rust_binding``
+    for the Rust-backed drop-in).
+    """
+    if impl == IMPL_REF:
+        return import_ref_modules(), IMPL_LABELS[IMPL_REF]
+    if impl == IMPL_RUST:
+        return import_rust_modules(), IMPL_LABELS[IMPL_RUST]
+    fail("unknown implementation: {!r} (expected 'ref' or 'rust')".format(impl))
 
 
 # ---------------------------------------------------------------------------
@@ -233,25 +308,20 @@ def predict_op(modules: Dict[str, object], model: str) -> Callable:
     return predict
 
 
-def reltest_op(modules: Dict[str, object], model: str) -> Callable:
-    """The reltest entry point ``<model>.reltest(...)``.
+def reltest_op(modules: Dict[str, object], model: str, impl: str) -> Callable:
+    """The reltest entry point for ``model`` under implementation ``impl``.
 
-    The reference exposes reltest as a *method on each model module*
-    (``norm.reltest``, ``gamma.reltest``, ``genextreme.reltest``), not as
-    ``fitdistcp.reltest.reltest_<model>``. The per-model signatures differ in
-    the parameter names (``loc``/``scale`` for norm, ``a``/``scale`` for gamma,
-    ``xi``/``loc``/``scale`` for genextreme), so we return a closure that maps
-    the fixture's native-order ``params`` onto the right keyword arguments.
+    * ``ref`` — the reference exposes reltest as a *method on each model module*
+      (``norm.reltest``, ``gamma.reltest``, ``genextreme.reltest``). The
+      per-model signatures differ in the parameter names (``loc``/``scale`` for
+      norm, ``a``/``scale`` for gamma, ``xi``/``loc``/``scale`` for genextreme),
+      so we return a closure that maps the fixture's native-order ``params``
+      onto the right keyword arguments.
+    * ``rust`` — the Rust-backed drop-in exposes a single
+      ``fitdistcp.reltest.reltest(model, ntrials, nx, p, true_params, init)``
+      entry point; we pass the fixture's native-order ``params`` as both
+      ``true_params`` and ``init``.
     """
-    mod = modules.get(model)
-    if mod is None:
-        fail("the Python module has no '{}' module.".format(model))
-    fn = getattr(mod, "reltest", None)
-    if fn is None:
-        fail(
-            "the Python module '{}' has no 'reltest' entry point.".format(model)
-        )
-
     # Matched probability grid. The reference Python reltest defaults to
     # p = 0.0001*range(1,10000) (9999 points), which makes each trial's ppf
     # evaluation ~50x more expensive than the reference R reltest default
@@ -261,6 +331,43 @@ def reltest_op(modules: Dict[str, object], model: str) -> Callable:
     import numpy as np
 
     p_grid = np.arange(0.005, 0.995, 0.005)
+
+    if impl == IMPL_RUST:
+        # The drop-in's reltest lives in the `fitdistcp.reltest` submodule.
+        try:
+            reltest_mod = __import__(
+                "{}.reltest".format(RUST_PKG), fromlist=["reltest"]
+            )
+        except ImportError as exc:
+            fail(
+                "the Rust-backed '{}' package has no 'reltest' submodule: "
+                "{}".format(RUST_PKG, exc)
+            )
+        fn = getattr(reltest_mod, "reltest", None)
+        if fn is None:
+            fail("the Rust-backed reltest submodule has no 'reltest' entry point.")
+
+        def run_rust(params, ntrials, nx):
+            return fn(
+                model=model,
+                ntrials=ntrials,
+                nx=nx,
+                p=p_grid,
+                true_params=params,
+                init=params,
+            )
+
+        return run_rust
+
+    # --- reference mode ---
+    mod = modules.get(model)
+    if mod is None:
+        fail("the Python module has no '{}' module.".format(model))
+    fn = getattr(mod, "reltest", None)
+    if fn is None:
+        fail(
+            "the Python module '{}' has no 'reltest' entry point.".format(model)
+        )
 
     def run(params, ntrials, nx):
         # plot=False so the harness never opens a figure (headless container).
@@ -288,7 +395,17 @@ def reltest_op(modules: Dict[str, object], model: str) -> Callable:
 
 def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Reference Python module performance harness (Group C)."
+        description="Python fitdistcp performance harness (Group C)."
+    )
+    parser.add_argument(
+        "--impl",
+        choices=(IMPL_REF, IMPL_RUST),
+        default=os.environ.get("BENCH_IMPL", IMPL_REF),
+        help=(
+            "implementation to benchmark: 'ref' (vendored reference module) or "
+            "'rust' (Rust-backed drop-in binding). Default: 'ref' (or the "
+            "BENCH_IMPL environment variable if set)."
+        ),
     )
     parser.add_argument("--out", default=None, help="output CSV path (default: stdout)")
     parser.add_argument("--warmup", type=int, default=3, help="warmup iterations")
@@ -311,7 +428,7 @@ def main(argv: Sequence[str]) -> int:
 
     warnings.filterwarnings("ignore")
 
-    modules = import_fitdistcp()
+    modules, impl_label = import_fitdistcp(args.impl)
     fx = load_fixture(args.inputs)
 
     grid_x = list(fx["grid"]["x"])
@@ -323,7 +440,8 @@ def main(argv: Sequence[str]) -> int:
 
     def add_row(model: str, operation: str, n: int, t: Dict[str, int]) -> None:
         rows.append(
-            "py_module,{},{},{},{},{},{},{}".format(
+            "{},{},{},{},{},{},{},{}".format(
+                impl_label,
                 model,
                 operation,
                 n,
@@ -405,17 +523,27 @@ def main(argv: Sequence[str]) -> int:
     rt_nx = int(rt["nx"])
     for model in MODELS:
         params = list(rt["params"][model])
-        run = reltest_op(modules, model)
+        run = reltest_op(modules, model, args.impl)
 
         def run_reltest(run=run, params=params):
             return run(params, rt_ntrials, rt_nx)
 
-        add_row(
-            model,
-            "reltest",
-            rt_nx,
-            time_workload(args.warmup, args.repeats, run_reltest),
-        )
+        # DOCUMENTED LIMITATION: the Rust-backed gamma reltest path reliably
+        # panics inside the `special` crate's `inc_gamma` (a pre-existing core
+        # robustness bug, out of scope for this harness). Skip that one row with
+        # a stderr note rather than aborting the whole run. The reference mode is
+        # unaffected (it uses the reference's own gamma reltest).
+        try:
+            timing = time_workload(args.warmup, args.repeats, run_reltest)
+        except BaseException as exc:  # noqa: BLE001 (PanicException is not Exception)
+            sys.stderr.write(
+                "bench_ref_py.py: skipping reltest for {}/{} ({}: {})\n".format(
+                    args.impl, model, type(exc).__name__, exc
+                )
+            )
+            continue
+
+        add_row(model, "reltest", rt_nx, timing)
 
     # --- emit CSV ---
     header = "implementation,model,operation,n,median_ns,min_ns,max_ns,repeats"

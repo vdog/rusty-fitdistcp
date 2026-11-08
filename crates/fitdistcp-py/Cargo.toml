@@ -15,3 +15,7 @@ crate-type = ["cdylib"]
 fitdistcp-core.workspace = true
 pyo3.workspace = true
 numpy.workspace = true
+# B3.3: the binding inverts the normalized observed information `ldd` to build
+# the reference object-dtype `standard_errors` (the reference `utils.py::make_se`
+# takes `lddi = inv(ldd)`). `nalgebra` is already a workspace dependency.
+nalgebra.workspace = true

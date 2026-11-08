@@ -77,6 +77,7 @@
 use numpy::{IntoPyArray, PyArray1, PyReadonlyArray1};
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
+use pyo3::Py;
 
 use fitdistcp_core::api::{
     predict, predict_gev, predict_gev_p1, predict_norm_p1, FitResult, NormP1Result,
@@ -266,9 +267,93 @@ fn rvs_dict_norm_p1<'py>(
 
 /// The reference `ml_value` (the maximized log-likelihood).
 ///
-/// The core reports `aic = 2k - 2*loglik`, so `loglik = k - aic/2`.
+/// B3.2: the core [`FitResult`] carries `loglik` explicitly (the Phase A
+/// amendment), so we surface it directly rather than reconstructing it from
+/// `aic`. The reference reports `ml_value = sum(logpdf(x))` (e.g. `norm.py`).
 fn ml_value(r: &FitResult) -> f64 {
-    r.aic / -2.0 + r.ml_params.len() as f64
+    r.loglik
+}
+
+/// B2.1/B3.2: the reference `ml_value` from a core [`FitResult`]'s `loglik`.
+///
+/// Alias of [`ml_value`] with the plan's helper name, used by the
+/// reference-named extension functions.
+fn ml_value_from_loglik(r: &FitResult) -> f64 {
+    r.loglik
+}
+
+/// B2.1/B3.3: build the reference object-dtype `standard_errors` array.
+///
+/// Replicates the reference `utils.py::make_se(nx, lddi)` exactly: for each
+/// diagonal entry `lddi[i, i]`, if `lddi[i, i] > 0` store the string
+/// `"square root not possible"`, else store `sqrt(-lddi[i, i] / nx)`. The
+/// result is a NumPy **object-dtype** array so it can hold both floats and the
+/// string.
+fn make_se_object<'py>(
+    py: Python<'py>,
+    lddi_diag: &[f64],
+    nx: f64,
+) -> PyResult<Bound<'py, PyArray1<Py<PyAny>>>> {
+    use pyo3::IntoPyObject;
+    let mut out: Vec<Py<PyAny>> = Vec::with_capacity(lddi_diag.len());
+    for &d in lddi_diag {
+        if d > 0.0 {
+            out.push("square root not possible".into_pyobject(py)?.unbind().into());
+        } else {
+            let v = (-d / nx).sqrt();
+            out.push(v.into_pyobject(py)?.unbind().into());
+        }
+    }
+    Ok(PyArray1::from_vec(py, out))
+}
+
+/// B2.1/B3.3: recompute the reference `standard_errors` from the normalized
+/// observed information `ldd`.
+///
+/// The reference `make_se` takes `lddi = inv(ldd)` where `ldd` is the
+/// **normalized** observed information `(1/n) Σ ∂²ℓ/∂θ_i∂θ_j` (the core
+/// [`DmgsIntegrator::normalized_ldd`]). We invert `ldd` with `nalgebra` and
+/// build the object-dtype array from its diagonal.
+fn standard_errors_from_ldd<'py, M: DmgsModel + Clone + Sync>(
+    py: Python<'py>,
+    model: M,
+    params: &[f64],
+    y: &[f64],
+) -> PyResult<Bound<'py, PyArray1<Py<PyAny>>>> {
+    use nalgebra::DMatrix;
+    let integ = fitdistcp_core::dmgs::DmgsIntegrator::new(model);
+    let ldd = integ.normalized_ldd(params, y);
+    let p = ldd.nrows();
+    let lddi = ldd
+        .clone()
+        .try_inverse()
+        .unwrap_or_else(|| DMatrix::<f64>::zeros(p, p));
+    let diag: Vec<f64> = (0..p).map(|i| lddi[(i, i)]).collect();
+    make_se_object(py, &diag, y.len() as f64)
+}
+
+/// B2.1/B3.1: draw `n` uniform probabilities via `numpy.random.uniform`.
+///
+/// The reference `rvs` draws `np.random.uniform(size=n)` and inverts via `ppf`.
+/// We call NumPy through PyO3 so the RNG state is the global NumPy one (the
+/// reference behaviour).
+fn rvs_uniform_probs(py: Python<'_>, n: usize) -> PyResult<Vec<f64>> {
+    let np = py.import("numpy")?;
+    let kwargs = PyDict::new(py);
+    kwargs.set_item("size", n)?;
+    let arr = np.getattr("random")?.call_method("uniform", (), Some(&kwargs))?;
+    let arr: Vec<f64> = arr.extract()?;
+    Ok(arr)
+}
+
+/// B2.1: insert an object-dtype NumPy array under `key`.
+fn put_obj_arr<'py>(
+    _py: Python<'py>,
+    d: &Bound<'py, PyDict>,
+    key: &str,
+    values: Bound<'py, PyArray1<Py<PyAny>>>,
+) -> PyResult<()> {
+    d.set_item(key, values)
 }
 
 /// The reference `make_maic` 3-vector: `[ml_value, -nparams, ml_value - nparams]`.
@@ -362,8 +447,1261 @@ fn rvs_dict<'py>(py: Python<'py>, r: &FitResult, cp_method: &str) -> PyResult<Bo
 }
 
 /// The probability grid used by `rvs` for `n` deviates: midpoints `(i+0.5)/n`.
+///
+/// Kept for the legacy flat API; the reference-named `rvs` functions use
+/// [`rvs_uniform_probs`] (B3.1).
 fn rvs_probs(n: usize) -> Vec<f64> {
     (0..n).map(|i| (i as f64 + 0.5) / n as f64).collect()
+}
+
+// ---------------------------------------------------------------------------
+// B2: reference-named extension functions.
+//
+// These mirror the reference `fitdistcp` submodule API (`norm.ppf`, `expon.pdf`,
+// ...) with the reference signatures/defaults and return-dict keys. The thin
+// Python submodules under `python/fitdistcp/` (B4) delegate to these.
+//
+// The reference `ru` sampling is disabled by default and returns the placeholder
+// string `"ru not selected"` (scope decision 1). `extramodels`/`customprior`/PWM
+// are out of scope and return reference placeholders (scope decision 5).
+// ---------------------------------------------------------------------------
+
+/// The reference placeholder for an unselected `ru` result.
+const RU_NOT_SELECTED: &str = "ru not selected";
+/// The reference placeholder for an unselected `unbiasedv` result.
+const UNBIASEDV_NOT_SELECTED: &str = "unbiasedv not selected";
+/// The reference placeholder for an unselected PWM result.
+const PWM_NOT_SELECTED: &str = "pwm not selected";
+/// The reference placeholder for an unselected `extramodels` result.
+const EXTRAMODELS_NOT_SELECTED: &str = "extramodels not selected";
+
+/// Insert the reference `maic` 3-vector `[ml_value, -nparams, ml_value - nparams]`.
+fn put_maic<'py>(
+    py: Python<'py>,
+    d: &Bound<'py, PyDict>,
+    ml_value: f64,
+    nparams: usize,
+) -> PyResult<()> {
+    put_arr(py, d, "maic", make_maic(ml_value, nparams))
+}
+
+/// Insert the optional WAIC 3-vectors (`waic1`/`waic2`), or `None`.
+fn put_waic<'py>(py: Python<'py>, d: &Bound<'py, PyDict>, r: &FitResult) -> PyResult<()> {
+    match r.waic1 {
+        Some(v) => put_arr(py, d, "waic1", v.to_vec())?,
+        None => d.set_item("waic1", py.None())?,
+    }
+    match r.waic2 {
+        Some(v) => put_arr(py, d, "waic2", v.to_vec())?,
+        None => d.set_item("waic2", py.None())?,
+    }
+    Ok(())
+}
+
+/// Insert the optional out-of-sample log-scores, or `None`.
+fn put_logscores<'py>(py: Python<'py>, d: &Bound<'py, PyDict>, r: &FitResult) -> PyResult<()> {
+    match r.ml_oos_logscore {
+        Some(v) => d.set_item("ml_oos_logscore", v)?,
+        None => d.set_item("ml_oos_logscore", py.None())?,
+    }
+    match r.cp_oos_logscore {
+        Some(v) => d.set_item("cp_oos_logscore", v)?,
+        None => d.set_item("cp_oos_logscore", py.None())?,
+    }
+    Ok(())
+}
+
+/// Build the reference `ppf` return dict for a homogeneous (non-predictor) model.
+///
+/// Keys (reference `norm.py`/`expon.py`/`gumbel.py`/...):
+/// `ml_params, ml_value, standard_errors, ml_quantiles, cp_quantiles,
+/// ru_quantiles, maic, waic1, waic2, ml_oos_logscore, cp_oos_logscore,
+/// ml_mean, cp_mean, cp_method`.
+#[allow(clippy::too_many_arguments)]
+fn ref_ppf_dict<'py, M: DmgsModel + Clone + Sync>(
+    py: Python<'py>,
+    r: &FitResult,
+    model: M,
+    y: &[f64],
+    cp_method: &str,
+) -> PyResult<Bound<'py, PyDict>> {
+    let d = PyDict::new(py);
+    put_arr(py, &d, "ml_params", r.ml_params.clone())?;
+    d.set_item("ml_value", ml_value_from_loglik(r))?;
+    let se = standard_errors_from_ldd(py, model, &r.ml_params, y)?;
+    put_obj_arr(py, &d, "standard_errors", se)?;
+    put_arr(py, &d, "ml_quantiles", r.ml_quantiles.clone())?;
+    put_arr(py, &d, "cp_quantiles", r.cp_quantiles.clone())?;
+    d.set_item("ru_quantiles", RU_NOT_SELECTED)?;
+    put_maic(py, &d, ml_value_from_loglik(r), r.ml_params.len())?;
+    put_waic(py, &d, r)?;
+    put_logscores(py, &d, r)?;
+    d.set_item("ml_mean", r.ml_mean)?;
+    d.set_item("cp_mean", r.cp_mean)?;
+    d.set_item("cp_method", cp_method)?;
+    Ok(d)
+}
+
+/// Build the reference `pdf` return dict: `ml_params, ml_pdf, cp_pdf, ru_pdf,
+/// cp_method`.
+fn ref_pdf_dict<'py>(
+    py: Python<'py>,
+    r: &FitResult,
+    cp_method: &str,
+) -> PyResult<Bound<'py, PyDict>> {
+    let d = PyDict::new(py);
+    put_arr(py, &d, "ml_params", r.ml_params.clone())?;
+    put_arr(py, &d, "ml_pdf", r.ml_pdf.clone())?;
+    put_arr(py, &d, "cp_pdf", r.cp_pdf.clone())?;
+    d.set_item("ru_pdf", RU_NOT_SELECTED)?;
+    d.set_item("cp_method", cp_method)?;
+    Ok(d)
+}
+
+/// Build the reference `cdf` return dict: `ml_params, ml_cdf, cp_cdf, ru_cdf,
+/// cp_method`.
+fn ref_cdf_dict<'py>(
+    py: Python<'py>,
+    r: &FitResult,
+    ml_cdf: Vec<f64>,
+    cp_cdf: Vec<f64>,
+    cp_method: &str,
+) -> PyResult<Bound<'py, PyDict>> {
+    let d = PyDict::new(py);
+    put_arr(py, &d, "ml_params", r.ml_params.clone())?;
+    put_arr(py, &d, "ml_cdf", ml_cdf)?;
+    put_arr(py, &d, "cp_cdf", cp_cdf)?;
+    d.set_item("ru_cdf", RU_NOT_SELECTED)?;
+    d.set_item("cp_method", cp_method)?;
+    Ok(d)
+}
+
+/// Build the reference `rvs` return dict: `ml_params, ml_deviates, cp_deviates,
+/// ru_deviates, cp_method`.
+fn ref_rvs_dict<'py>(
+    py: Python<'py>,
+    r: &FitResult,
+    cp_method: &str,
+) -> PyResult<Bound<'py, PyDict>> {
+    let d = PyDict::new(py);
+    put_arr(py, &d, "ml_params", r.ml_params.clone())?;
+    put_arr(py, &d, "ml_deviates", r.ml_quantiles.clone())?;
+    put_arr(py, &d, "cp_deviates", r.cp_quantiles.clone())?;
+    d.set_item("ru_deviates", RU_NOT_SELECTED)?;
+    d.set_item("cp_method", cp_method)?;
+    Ok(d)
+}
+
+// ---------------------------------------------------------------------------
+// B2.2: reference-named functions — `norm`, `expon`, `lnorm` (analytic CP).
+// ---------------------------------------------------------------------------
+
+/// Reference `norm.ppf`.
+#[pyfunction]
+#[pyo3(signature = (x, p, means=false, waicscores=false, logscores=false, ru=false, ru_nsamples=100000, unbiasedv=false))]
+#[allow(clippy::too_many_arguments)]
+fn ppf_norm_ref<'py>(
+    py: Python<'py>,
+    x: PyReadonlyArray1<'py, f64>,
+    p: PyReadonlyArray1<'py, f64>,
+    means: bool,
+    waicscores: bool,
+    logscores: bool,
+    ru: bool,
+    ru_nsamples: usize,
+    unbiasedv: bool,
+) -> PyResult<Bound<'py, PyDict>> {
+    let _ = (means, waicscores, logscores, ru, ru_nsamples);
+    let x = x.as_slice()?.to_vec();
+    let p = p.as_slice()?.to_vec();
+    let req = make_request(x.clone(), x.clone(), p, None, None, None, None);
+    let r = predict(Normal, &req, &[0.0, 1.0]);
+    let d = ref_ppf_dict(py, &r, Normal, &x, ANALYTIC_CPMETHOD)?;
+    // norm-specific extras.
+    d.set_item("uv_params", UNBIASEDV_NOT_SELECTED)?;
+    d.set_item("uv_quantiles", UNBIASEDV_NOT_SELECTED)?;
+    let _ = unbiasedv;
+    Ok(d)
+}
+
+/// Reference `norm.pdf`.
+#[pyfunction]
+#[pyo3(signature = (x, y=None, ru=false, ru_nsamples=1000))]
+fn pdf_norm_ref<'py>(
+    py: Python<'py>,
+    x: PyReadonlyArray1<'py, f64>,
+    y: Option<PyReadonlyArray1<'py, f64>>,
+    ru: bool,
+    ru_nsamples: usize,
+) -> PyResult<Bound<'py, PyDict>> {
+    let _ = (ru, ru_nsamples);
+    let x = x.as_slice()?.to_vec();
+    let y = match y {
+        Some(v) => v.as_slice()?.to_vec(),
+        None => x.clone(),
+    };
+    let req = make_request(x, y, vec![0.5], None, None, None, None);
+    let r = predict(Normal, &req, &[0.0, 1.0]);
+    ref_pdf_dict(py, &r, ANALYTIC_CPMETHOD)
+}
+
+/// Reference `norm.cdf`.
+#[pyfunction]
+#[pyo3(signature = (x, y=None, ru=false, ru_nsamples=1000))]
+fn cdf_norm_ref<'py>(
+    py: Python<'py>,
+    x: PyReadonlyArray1<'py, f64>,
+    y: Option<PyReadonlyArray1<'py, f64>>,
+    ru: bool,
+    ru_nsamples: usize,
+) -> PyResult<Bound<'py, PyDict>> {
+    let _ = (ru, ru_nsamples);
+    let x = x.as_slice()?.to_vec();
+    let y = match y {
+        Some(v) => v.as_slice()?.to_vec(),
+        None => x.clone(),
+    };
+    let req = make_request(x, y.clone(), vec![0.5], None, None, None, None);
+    let r = predict(Normal, &req, &[0.0, 1.0]);
+    let ml_cdf = cdf_at(&Normal, &r.ml_params, &y);
+    let cp_cdf = cdf_at(&Normal, &r.cp_params, &y);
+    ref_cdf_dict(py, &r, ml_cdf, cp_cdf, ANALYTIC_CPMETHOD)
+}
+
+/// Reference `norm.rvs`.
+#[pyfunction]
+#[pyo3(signature = (n, x, ru=false, mlcp=true))]
+fn rvs_norm_ref<'py>(
+    py: Python<'py>,
+    n: usize,
+    x: PyReadonlyArray1<'py, f64>,
+    ru: bool,
+    mlcp: bool,
+) -> PyResult<Bound<'py, PyDict>> {
+    let _ = ru;
+    let x = x.as_slice()?.to_vec();
+    if !mlcp {
+        let d = PyDict::new(py);
+        d.set_item("ml_params", "mlcp not selected")?;
+        d.set_item("ml_deviates", "mlcp not selected")?;
+        d.set_item("cp_deviates", "mlcp not selected")?;
+        d.set_item("ru_deviates", RU_NOT_SELECTED)?;
+        d.set_item("cp_method", ANALYTIC_CPMETHOD)?;
+        return Ok(d);
+    }
+    let p = rvs_uniform_probs(py, n)?;
+    let req = make_request(x.clone(), x, p, None, None, None, None);
+    let r = predict(Normal, &req, &[0.0, 1.0]);
+    ref_rvs_dict(py, &r, ANALYTIC_CPMETHOD)
+}
+
+/// Reference `expon.ppf`.
+#[pyfunction]
+#[pyo3(signature = (x, p, means=false, waicscores=false, logscores=false, ru=false, ru_nsamples=100000))]
+#[allow(clippy::too_many_arguments)]
+fn ppf_expon_ref<'py>(
+    py: Python<'py>,
+    x: PyReadonlyArray1<'py, f64>,
+    p: PyReadonlyArray1<'py, f64>,
+    means: bool,
+    waicscores: bool,
+    logscores: bool,
+    ru: bool,
+    ru_nsamples: usize,
+) -> PyResult<Bound<'py, PyDict>> {
+    let _ = (means, waicscores, logscores, ru, ru_nsamples);
+    let x = x.as_slice()?.to_vec();
+    let p = p.as_slice()?.to_vec();
+    let req = make_request(x.clone(), x.clone(), p, None, None, None, None);
+    let r = predict(Exponential, &req, &[1.0]);
+    ref_ppf_dict(py, &r, Exponential, &x, ANALYTIC_CPMETHOD)
+}
+
+/// Reference `expon.pdf`.
+#[pyfunction]
+#[pyo3(signature = (x, y=None, ru=false, ru_nsamples=1000))]
+fn pdf_expon_ref<'py>(
+    py: Python<'py>,
+    x: PyReadonlyArray1<'py, f64>,
+    y: Option<PyReadonlyArray1<'py, f64>>,
+    ru: bool,
+    ru_nsamples: usize,
+) -> PyResult<Bound<'py, PyDict>> {
+    let _ = (ru, ru_nsamples);
+    let x = x.as_slice()?.to_vec();
+    let y = match y {
+        Some(v) => v.as_slice()?.to_vec(),
+        None => x.clone(),
+    };
+    let req = make_request(x, y, vec![0.5], None, None, None, None);
+    let r = predict(Exponential, &req, &[1.0]);
+    ref_pdf_dict(py, &r, ANALYTIC_CPMETHOD)
+}
+
+/// Reference `expon.cdf`.
+#[pyfunction]
+#[pyo3(signature = (x, y=None, ru=false, ru_nsamples=1000))]
+fn cdf_expon_ref<'py>(
+    py: Python<'py>,
+    x: PyReadonlyArray1<'py, f64>,
+    y: Option<PyReadonlyArray1<'py, f64>>,
+    ru: bool,
+    ru_nsamples: usize,
+) -> PyResult<Bound<'py, PyDict>> {
+    let _ = (ru, ru_nsamples);
+    let x = x.as_slice()?.to_vec();
+    let y = match y {
+        Some(v) => v.as_slice()?.to_vec(),
+        None => x.clone(),
+    };
+    let req = make_request(x, y.clone(), vec![0.5], None, None, None, None);
+    let r = predict(Exponential, &req, &[1.0]);
+    let ml_cdf = cdf_at(&Exponential, &r.ml_params, &y);
+    let cp_cdf = cdf_at(&Exponential, &r.cp_params, &y);
+    ref_cdf_dict(py, &r, ml_cdf, cp_cdf, ANALYTIC_CPMETHOD)
+}
+
+/// Reference `expon.rvs`.
+#[pyfunction]
+#[pyo3(signature = (n, x, ru=false, mlcp=true))]
+fn rvs_expon_ref<'py>(
+    py: Python<'py>,
+    n: usize,
+    x: PyReadonlyArray1<'py, f64>,
+    ru: bool,
+    mlcp: bool,
+) -> PyResult<Bound<'py, PyDict>> {
+    let _ = ru;
+    let x = x.as_slice()?.to_vec();
+    if !mlcp {
+        let d = PyDict::new(py);
+        d.set_item("ml_params", "mlcp not selected")?;
+        d.set_item("ml_deviates", "mlcp not selected")?;
+        d.set_item("cp_deviates", "mlcp not selected")?;
+        d.set_item("ru_deviates", RU_NOT_SELECTED)?;
+        d.set_item("cp_method", ANALYTIC_CPMETHOD)?;
+        return Ok(d);
+    }
+    let p = rvs_uniform_probs(py, n)?;
+    let req = make_request(x.clone(), x, p, None, None, None, None);
+    let r = predict(Exponential, &req, &[1.0]);
+    ref_rvs_dict(py, &r, ANALYTIC_CPMETHOD)
+}
+
+/// Reference `lnorm.ppf`.
+#[pyfunction]
+#[pyo3(signature = (x, p, means=false, waicscores=false, logscores=false, dmgs=true, ru=false, ru_nsamples=100000))]
+#[allow(clippy::too_many_arguments)]
+fn ppf_lnorm_ref<'py>(
+    py: Python<'py>,
+    x: PyReadonlyArray1<'py, f64>,
+    p: PyReadonlyArray1<'py, f64>,
+    means: bool,
+    waicscores: bool,
+    logscores: bool,
+    dmgs: bool,
+    ru: bool,
+    ru_nsamples: usize,
+) -> PyResult<Bound<'py, PyDict>> {
+    let _ = (means, waicscores, logscores, dmgs, ru, ru_nsamples);
+    let x = x.as_slice()?.to_vec();
+    let p = p.as_slice()?.to_vec();
+    let req = make_request(x.clone(), x.clone(), p, None, None, None, None);
+    let r = predict(LogNormal, &req, &[0.0, 1.0]);
+    ref_ppf_dict(py, &r, LogNormal, &x, ANALYTIC_CPMETHOD)
+}
+
+/// Reference `lnorm.pdf`.
+#[pyfunction]
+#[pyo3(signature = (x, y=None, ru=false, ru_nsamples=1000))]
+fn pdf_lnorm_ref<'py>(
+    py: Python<'py>,
+    x: PyReadonlyArray1<'py, f64>,
+    y: Option<PyReadonlyArray1<'py, f64>>,
+    ru: bool,
+    ru_nsamples: usize,
+) -> PyResult<Bound<'py, PyDict>> {
+    let _ = (ru, ru_nsamples);
+    let x = x.as_slice()?.to_vec();
+    let y = match y {
+        Some(v) => v.as_slice()?.to_vec(),
+        None => x.clone(),
+    };
+    let req = make_request(x, y, vec![0.5], None, None, None, None);
+    let r = predict(LogNormal, &req, &[0.0, 1.0]);
+    ref_pdf_dict(py, &r, ANALYTIC_CPMETHOD)
+}
+
+/// Reference `lnorm.cdf`.
+#[pyfunction]
+#[pyo3(signature = (x, y=None, ru=false, ru_nsamples=1000))]
+fn cdf_lnorm_ref<'py>(
+    py: Python<'py>,
+    x: PyReadonlyArray1<'py, f64>,
+    y: Option<PyReadonlyArray1<'py, f64>>,
+    ru: bool,
+    ru_nsamples: usize,
+) -> PyResult<Bound<'py, PyDict>> {
+    let _ = (ru, ru_nsamples);
+    let x = x.as_slice()?.to_vec();
+    let y = match y {
+        Some(v) => v.as_slice()?.to_vec(),
+        None => x.clone(),
+    };
+    let req = make_request(x, y.clone(), vec![0.5], None, None, None, None);
+    let r = predict(LogNormal, &req, &[0.0, 1.0]);
+    let ml_cdf = cdf_at(&LogNormal, &r.ml_params, &y);
+    let cp_cdf = cdf_at(&LogNormal, &r.cp_params, &y);
+    ref_cdf_dict(py, &r, ml_cdf, cp_cdf, ANALYTIC_CPMETHOD)
+}
+
+/// Reference `lnorm.rvs`.
+#[pyfunction]
+#[pyo3(signature = (n, x, ru=false, mlcp=true))]
+fn rvs_lnorm_ref<'py>(
+    py: Python<'py>,
+    n: usize,
+    x: PyReadonlyArray1<'py, f64>,
+    ru: bool,
+    mlcp: bool,
+) -> PyResult<Bound<'py, PyDict>> {
+    let _ = ru;
+    let x = x.as_slice()?.to_vec();
+    if !mlcp {
+        let d = PyDict::new(py);
+        d.set_item("ml_params", "mlcp not selected")?;
+        d.set_item("ml_deviates", "mlcp not selected")?;
+        d.set_item("cp_deviates", "mlcp not selected")?;
+        d.set_item("ru_deviates", RU_NOT_SELECTED)?;
+        d.set_item("cp_method", ANALYTIC_CPMETHOD)?;
+        return Ok(d);
+    }
+    let p = rvs_uniform_probs(py, n)?;
+    let req = make_request(x.clone(), x, p, None, None, None, None);
+    let r = predict(LogNormal, &req, &[0.0, 1.0]);
+    ref_rvs_dict(py, &r, ANALYTIC_CPMETHOD)
+}
+
+// ---------------------------------------------------------------------------
+// B2.3: reference-named functions — `gumbel`, `weibull`, `gamma` (DMGS CP).
+// ---------------------------------------------------------------------------
+
+/// Reference `gumbel.ppf`.
+#[pyfunction]
+#[pyo3(signature = (x, p, means=false, waicscores=false, logscores=false, dmgs=true, ru=false, ru_nsamples=100000))]
+#[allow(clippy::too_many_arguments)]
+fn ppf_gumbel_ref<'py>(
+    py: Python<'py>,
+    x: PyReadonlyArray1<'py, f64>,
+    p: PyReadonlyArray1<'py, f64>,
+    means: bool,
+    waicscores: bool,
+    logscores: bool,
+    dmgs: bool,
+    ru: bool,
+    ru_nsamples: usize,
+) -> PyResult<Bound<'py, PyDict>> {
+    let _ = (means, waicscores, logscores, dmgs, ru, ru_nsamples);
+    let x = x.as_slice()?.to_vec();
+    let p = p.as_slice()?.to_vec();
+    let req = make_request(x.clone(), x.clone(), p, None, None, None, None);
+    let r = predict(Gumbel, &req, &[0.0, 1.0]);
+    ref_ppf_dict(py, &r, Gumbel, &x, RHP_DMGS_CPMETHOD)
+}
+
+/// Reference `gumbel.pdf`.
+#[pyfunction]
+#[pyo3(signature = (x, y=None, ru=false, ru_nsamples=1000))]
+fn pdf_gumbel_ref<'py>(
+    py: Python<'py>,
+    x: PyReadonlyArray1<'py, f64>,
+    y: Option<PyReadonlyArray1<'py, f64>>,
+    ru: bool,
+    ru_nsamples: usize,
+) -> PyResult<Bound<'py, PyDict>> {
+    let _ = (ru, ru_nsamples);
+    let x = x.as_slice()?.to_vec();
+    let y = match y {
+        Some(v) => v.as_slice()?.to_vec(),
+        None => x.clone(),
+    };
+    let req = make_request(x, y, vec![0.5], None, None, None, None);
+    let r = predict(Gumbel, &req, &[0.0, 1.0]);
+    ref_pdf_dict(py, &r, RHP_DMGS_CPMETHOD)
+}
+
+/// Reference `gumbel.cdf`.
+#[pyfunction]
+#[pyo3(signature = (x, y=None, ru=false, ru_nsamples=1000))]
+fn cdf_gumbel_ref<'py>(
+    py: Python<'py>,
+    x: PyReadonlyArray1<'py, f64>,
+    y: Option<PyReadonlyArray1<'py, f64>>,
+    ru: bool,
+    ru_nsamples: usize,
+) -> PyResult<Bound<'py, PyDict>> {
+    let _ = (ru, ru_nsamples);
+    let x = x.as_slice()?.to_vec();
+    let y = match y {
+        Some(v) => v.as_slice()?.to_vec(),
+        None => x.clone(),
+    };
+    let req = make_request(x, y.clone(), vec![0.5], None, None, None, None);
+    let r = predict(Gumbel, &req, &[0.0, 1.0]);
+    let ml_cdf = cdf_at(&Gumbel, &r.ml_params, &y);
+    let cp_cdf = cdf_at(&Gumbel, &r.cp_params, &y);
+    ref_cdf_dict(py, &r, ml_cdf, cp_cdf, RHP_DMGS_CPMETHOD)
+}
+
+/// Reference `gumbel.rvs`.
+#[pyfunction]
+#[pyo3(signature = (n, x, ru=false, mlcp=true))]
+fn rvs_gumbel_ref<'py>(
+    py: Python<'py>,
+    n: usize,
+    x: PyReadonlyArray1<'py, f64>,
+    ru: bool,
+    mlcp: bool,
+) -> PyResult<Bound<'py, PyDict>> {
+    let _ = ru;
+    let x = x.as_slice()?.to_vec();
+    if !mlcp {
+        let d = PyDict::new(py);
+        d.set_item("ml_params", "mlcp not selected")?;
+        d.set_item("ml_deviates", "mlcp not selected")?;
+        d.set_item("cp_deviates", "mlcp not selected")?;
+        d.set_item("ru_deviates", RU_NOT_SELECTED)?;
+        d.set_item("cp_method", RHP_DMGS_CPMETHOD)?;
+        return Ok(d);
+    }
+    let p = rvs_uniform_probs(py, n)?;
+    let req = make_request(x.clone(), x, p, None, None, None, None);
+    let r = predict(Gumbel, &req, &[0.0, 1.0]);
+    ref_rvs_dict(py, &r, RHP_DMGS_CPMETHOD)
+}
+
+/// Reference `weibull.ppf`.
+#[pyfunction]
+#[pyo3(signature = (x, p, means=false, waicscores=false, logscores=false, dmgs=true, ru=false, ru_nsamples=100000))]
+#[allow(clippy::too_many_arguments)]
+fn ppf_weibull_ref<'py>(
+    py: Python<'py>,
+    x: PyReadonlyArray1<'py, f64>,
+    p: PyReadonlyArray1<'py, f64>,
+    means: bool,
+    waicscores: bool,
+    logscores: bool,
+    dmgs: bool,
+    ru: bool,
+    ru_nsamples: usize,
+) -> PyResult<Bound<'py, PyDict>> {
+    let _ = (means, waicscores, logscores, dmgs, ru, ru_nsamples);
+    let x = x.as_slice()?.to_vec();
+    let p = p.as_slice()?.to_vec();
+    let req = make_request(x.clone(), x.clone(), p, None, None, None, None);
+    let r = predict(Weibull, &req, &[1.0, 1.0]);
+    ref_ppf_dict(py, &r, Weibull, &x, RHP_DMGS_CPMETHOD)
+}
+
+/// Reference `weibull.pdf`.
+#[pyfunction]
+#[pyo3(signature = (x, y=None, ru=false, ru_nsamples=1000))]
+fn pdf_weibull_ref<'py>(
+    py: Python<'py>,
+    x: PyReadonlyArray1<'py, f64>,
+    y: Option<PyReadonlyArray1<'py, f64>>,
+    ru: bool,
+    ru_nsamples: usize,
+) -> PyResult<Bound<'py, PyDict>> {
+    let _ = (ru, ru_nsamples);
+    let x = x.as_slice()?.to_vec();
+    let y = match y {
+        Some(v) => v.as_slice()?.to_vec(),
+        None => x.clone(),
+    };
+    let req = make_request(x, y, vec![0.5], None, None, None, None);
+    let r = predict(Weibull, &req, &[1.0, 1.0]);
+    ref_pdf_dict(py, &r, RHP_DMGS_CPMETHOD)
+}
+
+/// Reference `weibull.cdf`.
+#[pyfunction]
+#[pyo3(signature = (x, y=None, ru=false, ru_nsamples=1000))]
+fn cdf_weibull_ref<'py>(
+    py: Python<'py>,
+    x: PyReadonlyArray1<'py, f64>,
+    y: Option<PyReadonlyArray1<'py, f64>>,
+    ru: bool,
+    ru_nsamples: usize,
+) -> PyResult<Bound<'py, PyDict>> {
+    let _ = (ru, ru_nsamples);
+    let x = x.as_slice()?.to_vec();
+    let y = match y {
+        Some(v) => v.as_slice()?.to_vec(),
+        None => x.clone(),
+    };
+    let req = make_request(x, y.clone(), vec![0.5], None, None, None, None);
+    let r = predict(Weibull, &req, &[1.0, 1.0]);
+    let ml_cdf = cdf_at(&Weibull, &r.ml_params, &y);
+    let cp_cdf = cdf_at(&Weibull, &r.cp_params, &y);
+    ref_cdf_dict(py, &r, ml_cdf, cp_cdf, RHP_DMGS_CPMETHOD)
+}
+
+/// Reference `weibull.rvs`.
+#[pyfunction]
+#[pyo3(signature = (n, x, ru=false, mlcp=true))]
+fn rvs_weibull_ref<'py>(
+    py: Python<'py>,
+    n: usize,
+    x: PyReadonlyArray1<'py, f64>,
+    ru: bool,
+    mlcp: bool,
+) -> PyResult<Bound<'py, PyDict>> {
+    let _ = ru;
+    let x = x.as_slice()?.to_vec();
+    if !mlcp {
+        let d = PyDict::new(py);
+        d.set_item("ml_params", "mlcp not selected")?;
+        d.set_item("ml_deviates", "mlcp not selected")?;
+        d.set_item("cp_deviates", "mlcp not selected")?;
+        d.set_item("ru_deviates", RU_NOT_SELECTED)?;
+        d.set_item("cp_method", RHP_DMGS_CPMETHOD)?;
+        return Ok(d);
+    }
+    let p = rvs_uniform_probs(py, n)?;
+    let req = make_request(x.clone(), x, p, None, None, None, None);
+    let r = predict(Weibull, &req, &[1.0, 1.0]);
+    ref_rvs_dict(py, &r, RHP_DMGS_CPMETHOD)
+}
+
+/// Reference `gamma.ppf`.
+#[pyfunction]
+#[pyo3(signature = (x, p, fd1=0.01, fd2=0.01, means=false, waicscores=false, logscores=false, dmgs=true, ru=false, ru_nsamples=100000, prior="type 1", aderivs=true))]
+#[allow(clippy::too_many_arguments)]
+fn ppf_gamma_ref<'py>(
+    py: Python<'py>,
+    x: PyReadonlyArray1<'py, f64>,
+    p: PyReadonlyArray1<'py, f64>,
+    fd1: f64,
+    fd2: f64,
+    means: bool,
+    waicscores: bool,
+    logscores: bool,
+    dmgs: bool,
+    ru: bool,
+    ru_nsamples: usize,
+    prior: &str,
+    aderivs: bool,
+) -> PyResult<Bound<'py, PyDict>> {
+    let _ = (fd1, fd2, means, waicscores, logscores, dmgs, ru, ru_nsamples, prior, aderivs);
+    let x = x.as_slice()?.to_vec();
+    let p = p.as_slice()?.to_vec();
+    let req = make_request(x.clone(), x.clone(), p, None, None, None, None);
+    let r = predict(Gamma, &req, &[1.0, 1.0]);
+    ref_ppf_dict(py, &r, Gamma, &x, ADHOC_DMGS_CPMETHOD)
+}
+
+/// Reference `gamma.pdf`.
+#[pyfunction]
+#[pyo3(signature = (x, y=None, ru=false, ru_nsamples=1000))]
+fn pdf_gamma_ref<'py>(
+    py: Python<'py>,
+    x: PyReadonlyArray1<'py, f64>,
+    y: Option<PyReadonlyArray1<'py, f64>>,
+    ru: bool,
+    ru_nsamples: usize,
+) -> PyResult<Bound<'py, PyDict>> {
+    let _ = (ru, ru_nsamples);
+    let x = x.as_slice()?.to_vec();
+    let y = match y {
+        Some(v) => v.as_slice()?.to_vec(),
+        None => x.clone(),
+    };
+    let req = make_request(x, y, vec![0.5], None, None, None, None);
+    let r = predict(Gamma, &req, &[1.0, 1.0]);
+    ref_pdf_dict(py, &r, ADHOC_DMGS_CPMETHOD)
+}
+
+/// Reference `gamma.cdf`.
+#[pyfunction]
+#[pyo3(signature = (x, y=None, ru=false, ru_nsamples=1000))]
+fn cdf_gamma_ref<'py>(
+    py: Python<'py>,
+    x: PyReadonlyArray1<'py, f64>,
+    y: Option<PyReadonlyArray1<'py, f64>>,
+    ru: bool,
+    ru_nsamples: usize,
+) -> PyResult<Bound<'py, PyDict>> {
+    let _ = (ru, ru_nsamples);
+    let x = x.as_slice()?.to_vec();
+    let y = match y {
+        Some(v) => v.as_slice()?.to_vec(),
+        None => x.clone(),
+    };
+    let req = make_request(x, y.clone(), vec![0.5], None, None, None, None);
+    let r = predict(Gamma, &req, &[1.0, 1.0]);
+    let ml_cdf = cdf_at(&Gamma, &r.ml_params, &y);
+    let cp_cdf = cdf_at(&Gamma, &r.cp_params, &y);
+    ref_cdf_dict(py, &r, ml_cdf, cp_cdf, ADHOC_DMGS_CPMETHOD)
+}
+
+/// Reference `gamma.rvs`.
+#[pyfunction]
+#[pyo3(signature = (n, x, ru=false, mlcp=true))]
+fn rvs_gamma_ref<'py>(
+    py: Python<'py>,
+    n: usize,
+    x: PyReadonlyArray1<'py, f64>,
+    ru: bool,
+    mlcp: bool,
+) -> PyResult<Bound<'py, PyDict>> {
+    let _ = ru;
+    let x = x.as_slice()?.to_vec();
+    if !mlcp {
+        let d = PyDict::new(py);
+        d.set_item("ml_params", "mlcp not selected")?;
+        d.set_item("ml_deviates", "mlcp not selected")?;
+        d.set_item("cp_deviates", "mlcp not selected")?;
+        d.set_item("ru_deviates", RU_NOT_SELECTED)?;
+        d.set_item("cp_method", ADHOC_DMGS_CPMETHOD)?;
+        return Ok(d);
+    }
+    let p = rvs_uniform_probs(py, n)?;
+    let req = make_request(x.clone(), x, p, None, None, None, None);
+    let r = predict(Gamma, &req, &[1.0, 1.0]);
+    ref_rvs_dict(py, &r, ADHOC_DMGS_CPMETHOD)
+}
+
+// ---------------------------------------------------------------------------
+// B2.4: reference-named functions — `genextreme`, `genpareto` (DMGS + revert2ml).
+// ---------------------------------------------------------------------------
+
+/// Reference `genextreme.ppf`.
+#[pyfunction]
+#[pyo3(signature = (x, p, ics=None, fdalpha=0.01, means=false, waicscores=false, extramodels=false, pdf=false, customprior=0.0, dmgs=true, ru=false, ru_nsamples=100000))]
+#[allow(clippy::too_many_arguments)]
+fn ppf_genextreme_ref<'py>(
+    py: Python<'py>,
+    x: PyReadonlyArray1<'py, f64>,
+    p: PyReadonlyArray1<'py, f64>,
+    ics: Option<PyReadonlyArray1<'py, f64>>,
+    fdalpha: f64,
+    means: bool,
+    waicscores: bool,
+    extramodels: bool,
+    pdf: bool,
+    customprior: f64,
+    dmgs: bool,
+    ru: bool,
+    ru_nsamples: usize,
+) -> PyResult<Bound<'py, PyDict>> {
+    let _ = (ics, means, waicscores, extramodels, pdf, customprior, dmgs, ru, ru_nsamples);
+    let x = x.as_slice()?.to_vec();
+    let p = p.as_slice()?.to_vec();
+    let req = make_request(x.clone(), x.clone(), p, None, None, None, None);
+    let r = predict_gev(GenExtreme, &req, &[0.0, 1.0, 0.0], fdalpha);
+    let shape = r.ml_params.get(2).copied().unwrap_or(0.0);
+    let d = ref_ppf_dict(py, &r, GenExtreme, &x, CRHPFLAT_DMGS_CPMETHOD)?;
+    // genextreme-specific extras.
+    d.set_item("pw_params", PWM_NOT_SELECTED)?;
+    d.set_item("pw_quantiles", PWM_NOT_SELECTED)?;
+    d.set_item("custom_quantiles", EXTRAMODELS_NOT_SELECTED)?;
+    d.set_item("ml_max", GenExtreme.ml_max(r.ml_params[0], r.ml_params[1], shape))?;
+    d.set_item("revert2ml", GenExtreme.revert2ml(shape))?;
+    put_arr(py, &d, "ml_pdf", r.ml_pdf.clone())?;
+    put_arr(py, &d, "cp_pdf", r.cp_pdf.clone())?;
+    d.set_item("custom_mean", EXTRAMODELS_NOT_SELECTED)?;
+    Ok(d)
+}
+
+/// Reference `genextreme.pdf`.
+#[pyfunction]
+#[pyo3(signature = (x, y=None, ics=None))]
+fn pdf_genextreme_ref<'py>(
+    py: Python<'py>,
+    x: PyReadonlyArray1<'py, f64>,
+    y: Option<PyReadonlyArray1<'py, f64>>,
+    ics: Option<PyReadonlyArray1<'py, f64>>,
+) -> PyResult<Bound<'py, PyDict>> {
+    let _ = ics;
+    let x = x.as_slice()?.to_vec();
+    let y = match y {
+        Some(v) => v.as_slice()?.to_vec(),
+        None => x.clone(),
+    };
+    let req = make_request(x, y, vec![0.5], None, None, None, None);
+    let r = predict_gev(GenExtreme, &req, &[0.0, 1.0, 0.0], 0.01);
+    let shape = r.ml_params.get(2).copied().unwrap_or(0.0);
+    let d = ref_pdf_dict(py, &r, CRHPFLAT_DMGS_CPMETHOD)?;
+    d.set_item("revert2ml", GenExtreme.revert2ml(shape))?;
+    Ok(d)
+}
+
+/// Reference `genextreme.cdf`.
+#[pyfunction]
+#[pyo3(signature = (x, y=None, ics=None, extramodels=false))]
+fn cdf_genextreme_ref<'py>(
+    py: Python<'py>,
+    x: PyReadonlyArray1<'py, f64>,
+    y: Option<PyReadonlyArray1<'py, f64>>,
+    ics: Option<PyReadonlyArray1<'py, f64>>,
+    extramodels: bool,
+) -> PyResult<Bound<'py, PyDict>> {
+    let _ = (ics, extramodels);
+    let x = x.as_slice()?.to_vec();
+    let y = match y {
+        Some(v) => v.as_slice()?.to_vec(),
+        None => x.clone(),
+    };
+    let req = make_request(x, y.clone(), vec![0.5], None, None, None, None);
+    let r = predict_gev(GenExtreme, &req, &[0.0, 1.0, 0.0], 0.01);
+    let shape = r.ml_params.get(2).copied().unwrap_or(0.0);
+    let ml_cdf = cdf_at(&GenExtreme, &r.ml_params, &y);
+    let cp_cdf = cdf_at(&GenExtreme, &r.cp_params, &y);
+    let d = ref_cdf_dict(py, &r, ml_cdf, cp_cdf, CRHPFLAT_DMGS_CPMETHOD)?;
+    d.set_item("revert2ml", GenExtreme.revert2ml(shape))?;
+    Ok(d)
+}
+
+/// Reference `genextreme.rvs`.
+#[pyfunction]
+#[pyo3(signature = (n, x, ics=None, extramodels=false, mlcp=true))]
+fn rvs_genextreme_ref<'py>(
+    py: Python<'py>,
+    n: usize,
+    x: PyReadonlyArray1<'py, f64>,
+    ics: Option<PyReadonlyArray1<'py, f64>>,
+    extramodels: bool,
+    mlcp: bool,
+) -> PyResult<Bound<'py, PyDict>> {
+    let _ = (ics, extramodels);
+    let x = x.as_slice()?.to_vec();
+    if !mlcp {
+        let d = PyDict::new(py);
+        d.set_item("ml_params", "mlcp not selected")?;
+        d.set_item("ml_deviates", "mlcp not selected")?;
+        d.set_item("cp_deviates", "mlcp not selected")?;
+        d.set_item("ru_deviates", RU_NOT_SELECTED)?;
+        d.set_item("cp_method", CRHPFLAT_DMGS_CPMETHOD)?;
+        return Ok(d);
+    }
+    let p = rvs_uniform_probs(py, n)?;
+    let req = make_request(x.clone(), x, p, None, None, None, None);
+    let r = predict_gev(GenExtreme, &req, &[0.0, 1.0, 0.0], 0.01);
+    ref_rvs_dict(py, &r, CRHPFLAT_DMGS_CPMETHOD)
+}
+
+/// Reference `genpareto.ppf`.
+#[pyfunction]
+#[pyo3(signature = (x, p, kloc=0.0, ics=None, fdalpha=0.01, customprior=0.0, minxi=-1.0, maxxi=2.0, means=false, waicscores=false, extramodels=false, pdf=false, dmgs=true, ru=false, ru_nsamples=100000))]
+#[allow(clippy::too_many_arguments)]
+fn ppf_genpareto_ref<'py>(
+    py: Python<'py>,
+    x: PyReadonlyArray1<'py, f64>,
+    p: PyReadonlyArray1<'py, f64>,
+    kloc: f64,
+    ics: Option<PyReadonlyArray1<'py, f64>>,
+    fdalpha: f64,
+    customprior: f64,
+    minxi: f64,
+    maxxi: f64,
+    means: bool,
+    waicscores: bool,
+    extramodels: bool,
+    pdf: bool,
+    dmgs: bool,
+    ru: bool,
+    ru_nsamples: usize,
+) -> PyResult<Bound<'py, PyDict>> {
+    let _ = (kloc, ics, fdalpha, customprior, minxi, maxxi, means, waicscores, extramodels, pdf, dmgs, ru, ru_nsamples);
+    let x = x.as_slice()?.to_vec();
+    let p = p.as_slice()?.to_vec();
+    let req = make_request(x.clone(), x.clone(), p, None, None, None, None);
+    let r = predict(GenPareto, &req, &[1.0, 0.0]);
+    let shape = r.ml_params.get(1).copied().unwrap_or(0.0);
+    let d = ref_ppf_dict(py, &r, GenPareto, &x, CRHPFLAT_DMGS_CPMETHOD)?;
+    // genpareto-specific extras.
+    let ml_max = if shape < 0.0 {
+        -r.ml_params[0] / shape
+    } else {
+        f64::INFINITY
+    };
+    d.set_item("ml_max", ml_max)?;
+    d.set_item("revert2ml", shape.abs() >= 1.0 || shape > 30.0)?;
+    d.set_item("lp_quantiles", EXTRAMODELS_NOT_SELECTED)?;
+    d.set_item("lp2_quantiles", EXTRAMODELS_NOT_SELECTED)?;
+    d.set_item("dpi_quantiles", EXTRAMODELS_NOT_SELECTED)?;
+    put_arr(py, &d, "ml_pdf", r.ml_pdf.clone())?;
+    put_arr(py, &d, "cp_pdf", r.cp_pdf.clone())?;
+    Ok(d)
+}
+
+/// Reference `genpareto.pdf`.
+#[pyfunction]
+#[pyo3(signature = (x, y=None, kloc=0.0, ics=None, minxi=-1.0, maxxi=2.0, ru=false, ru_nsamples=1000))]
+#[allow(clippy::too_many_arguments)]
+fn pdf_genpareto_ref<'py>(
+    py: Python<'py>,
+    x: PyReadonlyArray1<'py, f64>,
+    y: Option<PyReadonlyArray1<'py, f64>>,
+    kloc: f64,
+    ics: Option<PyReadonlyArray1<'py, f64>>,
+    minxi: f64,
+    maxxi: f64,
+    ru: bool,
+    ru_nsamples: usize,
+) -> PyResult<Bound<'py, PyDict>> {
+    let _ = (kloc, ics, minxi, maxxi, ru, ru_nsamples);
+    let x = x.as_slice()?.to_vec();
+    let y = match y {
+        Some(v) => v.as_slice()?.to_vec(),
+        None => x.clone(),
+    };
+    let req = make_request(x, y, vec![0.5], None, None, None, None);
+    let r = predict(GenPareto, &req, &[1.0, 0.0]);
+    let shape = r.ml_params.get(1).copied().unwrap_or(0.0);
+    let d = ref_pdf_dict(py, &r, CRHPFLAT_DMGS_CPMETHOD)?;
+    d.set_item("revert2ml", shape <= -1.0)?;
+    Ok(d)
+}
+
+/// Reference `genpareto.cdf`.
+#[pyfunction]
+#[pyo3(signature = (x, y=None, kloc=0.0, ics=None, minxi=-1.0, maxxi=2.0, ru=false, ru_nsamples=1000))]
+#[allow(clippy::too_many_arguments)]
+fn cdf_genpareto_ref<'py>(
+    py: Python<'py>,
+    x: PyReadonlyArray1<'py, f64>,
+    y: Option<PyReadonlyArray1<'py, f64>>,
+    kloc: f64,
+    ics: Option<PyReadonlyArray1<'py, f64>>,
+    minxi: f64,
+    maxxi: f64,
+    ru: bool,
+    ru_nsamples: usize,
+) -> PyResult<Bound<'py, PyDict>> {
+    let _ = (kloc, ics, minxi, maxxi, ru, ru_nsamples);
+    let x = x.as_slice()?.to_vec();
+    let y = match y {
+        Some(v) => v.as_slice()?.to_vec(),
+        None => x.clone(),
+    };
+    let req = make_request(x, y.clone(), vec![0.5], None, None, None, None);
+    let r = predict(GenPareto, &req, &[1.0, 0.0]);
+    let shape = r.ml_params.get(1).copied().unwrap_or(0.0);
+    let ml_cdf = cdf_at(&GenPareto, &r.ml_params, &y);
+    let cp_cdf = cdf_at(&GenPareto, &r.cp_params, &y);
+    let d = ref_cdf_dict(py, &r, ml_cdf, cp_cdf, CRHPFLAT_DMGS_CPMETHOD)?;
+    d.set_item("revert2ml", shape <= -1.0)?;
+    Ok(d)
+}
+
+/// Reference `genpareto.rvs`.
+#[pyfunction]
+#[pyo3(signature = (n, x, kloc=0.0, ics=None, minxi=-1.0, maxxi=2.0, extramodels=false, ru=false, mlcp=true))]
+#[allow(clippy::too_many_arguments)]
+fn rvs_genpareto_ref<'py>(
+    py: Python<'py>,
+    n: usize,
+    x: PyReadonlyArray1<'py, f64>,
+    kloc: f64,
+    ics: Option<PyReadonlyArray1<'py, f64>>,
+    minxi: f64,
+    maxxi: f64,
+    extramodels: bool,
+    ru: bool,
+    mlcp: bool,
+) -> PyResult<Bound<'py, PyDict>> {
+    let _ = (kloc, ics, minxi, maxxi, extramodels, ru);
+    let x = x.as_slice()?.to_vec();
+    if !mlcp {
+        let d = PyDict::new(py);
+        d.set_item("ml_params", "mlcp not selected")?;
+        d.set_item("ml_deviates", "mlcp not selected")?;
+        d.set_item("cp_deviates", "mlcp not selected")?;
+        d.set_item("ru_deviates", RU_NOT_SELECTED)?;
+        d.set_item("cp_method", CRHPFLAT_DMGS_CPMETHOD)?;
+        return Ok(d);
+    }
+    let p = rvs_uniform_probs(py, n)?;
+    let req = make_request(x.clone(), x, p, None, None, None, None);
+    let r = predict(GenPareto, &req, &[1.0, 0.0]);
+    ref_rvs_dict(py, &r, CRHPFLAT_DMGS_CPMETHOD)
+}
+
+// ---------------------------------------------------------------------------
+// B2.5: reference-named functions — `genextreme_p1` (predictor).
+// ---------------------------------------------------------------------------
+
+/// Reference `genextreme_p1.ppf`.
+#[pyfunction]
+#[pyo3(signature = (x, t, t0=None, n0=None, p=None, ics=None, fdalpha=0.01, minxi=-1.0, maxxi=1.0, means=false, waicscores=false, extramodels=false, pdf=false, dmgs=true, ru=false, ru_nsamples=100000, predictordata=true, centering=true))]
+#[allow(clippy::too_many_arguments)]
+fn ppf_genextreme_p1_ref<'py>(
+    py: Python<'py>,
+    x: PyReadonlyArray1<'py, f64>,
+    t: PyReadonlyArray1<'py, f64>,
+    t0: Option<f64>,
+    n0: Option<f64>,
+    p: Option<PyReadonlyArray1<'py, f64>>,
+    ics: Option<PyReadonlyArray1<'py, f64>>,
+    fdalpha: f64,
+    minxi: f64,
+    maxxi: f64,
+    means: bool,
+    waicscores: bool,
+    extramodels: bool,
+    pdf: bool,
+    dmgs: bool,
+    ru: bool,
+    ru_nsamples: usize,
+    predictordata: bool,
+    centering: bool,
+) -> PyResult<Bound<'py, PyDict>> {
+    let _ = (ics, minxi, maxxi, means, waicscores, extramodels, pdf, dmgs, ru, ru_nsamples, predictordata, centering);
+    let x = x.as_slice()?.to_vec();
+    let t = t.as_slice()?.to_vec();
+    let p = match p {
+        Some(v) => v.as_slice()?.to_vec(),
+        None => (1..10).map(|i| i as f64 * 0.1).collect(),
+    };
+    let t0 = maket0(&t, t0, n0);
+    let model = GenExtremeP1::new(t, t0, n0.unwrap_or(1.0));
+    let mean_t = model.mean_t();
+    let req = make_request(x.clone(), x.clone(), p, None, None, None, None);
+    let r = decenter_fit(
+        &predict_gev_p1(&model, &req, &[0.0, 0.0, 1.0, 0.0], fdalpha),
+        mean_t,
+    );
+    let shape = r.ml_params.get(3).copied().unwrap_or(0.0);
+    let d = ref_ppf_dict(py, &r, model.clone(), &x, CRHPFLAT_DMGS_CPMETHOD)?;
+    // genextreme_p1-specific extras. `predictedparameter` is the decentered
+    // location `a + b*(t_i - mean(t))`; `adjustedx` is the generalized residual
+    // `qgev(pgev(x_i; loc_i, sigma, xi); loc0, sigma, xi)`.
+    let a = r.ml_params[0];
+    let b = r.ml_params[1];
+    let sigma = r.ml_params[2];
+    let predictedparameter: Vec<f64> = model
+        .t
+        .iter()
+        .map(|&ti| a + b * (ti - mean_t))
+        .collect();
+    let adjustedx: Vec<f64> = x
+        .iter()
+        .enumerate()
+        .map(|(i, &xi)| {
+            let p_i = model.cdf(xi, a, b, sigma, shape, i);
+            model.quantile(p_i, a, b, sigma, shape, 0)
+        })
+        .collect();
+    put_arr(py, &d, "predictedparameter", predictedparameter)?;
+    put_arr(py, &d, "adjustedx", adjustedx)?;
+    d.set_item("revert2ml", model.revert2ml(shape))?;
+    d.set_item("ml_max", model.ml_max(r.ml_params[0], r.ml_params[2], shape))?;
+    put_arr(py, &d, "ml_pdf", r.ml_pdf.clone())?;
+    put_arr(py, &d, "cp_pdf", r.cp_pdf.clone())?;
+    Ok(d)
+}
+
+/// Reference `genextreme_p1.pdf`.
+#[pyfunction]
+#[pyo3(signature = (x, t, t0=None, n0=None, y=None, ics=None, fdalpha=0.01, minxi=-1.0, maxxi=1.0, extramodels=false, pdf=false, dmgs=true, ru=false, ru_nsamples=1000, predictordata=true, centering=true))]
+#[allow(clippy::too_many_arguments)]
+fn pdf_genextreme_p1_ref<'py>(
+    py: Python<'py>,
+    x: PyReadonlyArray1<'py, f64>,
+    t: PyReadonlyArray1<'py, f64>,
+    t0: Option<f64>,
+    n0: Option<f64>,
+    y: Option<PyReadonlyArray1<'py, f64>>,
+    ics: Option<PyReadonlyArray1<'py, f64>>,
+    fdalpha: f64,
+    minxi: f64,
+    maxxi: f64,
+    extramodels: bool,
+    pdf: bool,
+    dmgs: bool,
+    ru: bool,
+    ru_nsamples: usize,
+    predictordata: bool,
+    centering: bool,
+) -> PyResult<Bound<'py, PyDict>> {
+    let _ = (ics, minxi, maxxi, extramodels, pdf, dmgs, ru, ru_nsamples, predictordata, centering);
+    let x = x.as_slice()?.to_vec();
+    let t = t.as_slice()?.to_vec();
+    let y = match y {
+        Some(v) => v.as_slice()?.to_vec(),
+        None => x.clone(),
+    };
+    let t0 = maket0(&t, t0, n0);
+    let model = GenExtremeP1::new(t, t0, n0.unwrap_or(1.0));
+    let mean_t = model.mean_t();
+    let req = make_request(x, y, vec![0.5], None, None, None, None);
+    let r = decenter_fit(
+        &predict_gev_p1(&model, &req, &[0.0, 0.0, 1.0, 0.0], fdalpha),
+        mean_t,
+    );
+    let shape = r.ml_params.get(3).copied().unwrap_or(0.0);
+    let d = ref_pdf_dict(py, &r, CRHPFLAT_DMGS_CPMETHOD)?;
+    d.set_item("revert2ml", model.revert2ml(shape))?;
+    Ok(d)
+}
+
+/// Reference `genextreme_p1.cdf`.
+#[pyfunction]
+#[pyo3(signature = (x, t, t0=None, n0=None, y=None, ics=None, fdalpha=0.01, minxi=-1.0, maxxi=1.0, extramodels=false, dmgs=true, ru=false, ru_nsamples=1000, predictordata=true, centering=true))]
+#[allow(clippy::too_many_arguments)]
+fn cdf_genextreme_p1_ref<'py>(
+    py: Python<'py>,
+    x: PyReadonlyArray1<'py, f64>,
+    t: PyReadonlyArray1<'py, f64>,
+    t0: Option<f64>,
+    n0: Option<f64>,
+    y: Option<PyReadonlyArray1<'py, f64>>,
+    ics: Option<PyReadonlyArray1<'py, f64>>,
+    fdalpha: f64,
+    minxi: f64,
+    maxxi: f64,
+    extramodels: bool,
+    dmgs: bool,
+    ru: bool,
+    ru_nsamples: usize,
+    predictordata: bool,
+    centering: bool,
+) -> PyResult<Bound<'py, PyDict>> {
+    let _ = (ics, minxi, maxxi, extramodels, dmgs, ru, ru_nsamples, predictordata, centering);
+    let x = x.as_slice()?.to_vec();
+    let t = t.as_slice()?.to_vec();
+    let y = match y {
+        Some(v) => v.as_slice()?.to_vec(),
+        None => x.clone(),
+    };
+    let t0 = maket0(&t, t0, n0);
+    let model = GenExtremeP1::new(t, t0, n0.unwrap_or(1.0));
+    let mean_t = model.mean_t();
+    let req = make_request(x, y.clone(), vec![0.5], None, None, None, None);
+    let r = decenter_fit(
+        &predict_gev_p1(&model, &req, &[0.0, 0.0, 1.0, 0.0], fdalpha),
+        mean_t,
+    );
+    let shape = r.ml_params.get(3).copied().unwrap_or(0.0);
+    let ml_cdf = cdf_at(&model, &r.ml_params, &y);
+    let cp_cdf = cdf_at(&model, &r.cp_params, &y);
+    let d = ref_cdf_dict(py, &r, ml_cdf, cp_cdf, CRHPFLAT_DMGS_CPMETHOD)?;
+    d.set_item("revert2ml", model.revert2ml(shape))?;
+    Ok(d)
+}
+
+/// Reference `genextreme_p1.rvs`.
+#[pyfunction]
+#[pyo3(signature = (n, x, t, t0=None, n0=None, ics=None, minxi=-1.0, maxxi=1.0, extramodels=false, ru=false, mlcp=true))]
+#[allow(clippy::too_many_arguments)]
+fn rvs_genextreme_p1_ref<'py>(
+    py: Python<'py>,
+    n: usize,
+    x: PyReadonlyArray1<'py, f64>,
+    t: PyReadonlyArray1<'py, f64>,
+    t0: Option<f64>,
+    n0: Option<f64>,
+    ics: Option<PyReadonlyArray1<'py, f64>>,
+    minxi: f64,
+    maxxi: f64,
+    extramodels: bool,
+    ru: bool,
+    mlcp: bool,
+) -> PyResult<Bound<'py, PyDict>> {
+    let _ = (ics, minxi, maxxi, extramodels, ru);
+    let x = x.as_slice()?.to_vec();
+    let t = t.as_slice()?.to_vec();
+    if !mlcp {
+        let d = PyDict::new(py);
+        d.set_item("ml_params", "mlcp not selected")?;
+        d.set_item("ml_deviates", "mlcp not selected")?;
+        d.set_item("cp_deviates", "mlcp not selected")?;
+        d.set_item("ru_deviates", RU_NOT_SELECTED)?;
+        d.set_item("cp_method", CRHPFLAT_DMGS_CPMETHOD)?;
+        return Ok(d);
+    }
+    let t0 = maket0(&t, t0, n0);
+    let model = GenExtremeP1::new(t, t0, n0.unwrap_or(1.0));
+    let mean_t = model.mean_t();
+    let p = rvs_uniform_probs(py, n)?;
+    let req = make_request(x.clone(), x, p, None, None, None, None);
+    let r = decenter_fit(
+        &predict_gev_p1(&model, &req, &[0.0, 0.0, 1.0, 0.0], 0.01),
+        mean_t,
+    );
+    ref_rvs_dict(py, &r, CRHPFLAT_DMGS_CPMETHOD)
+}
+
+// ---------------------------------------------------------------------------
+// B2.6: reference `reltest` module function.
+// ---------------------------------------------------------------------------
+
+/// Reference `reltest` (delegates to the core reliability test).
+///
+/// Returns `{'actual_p_ml', 'actual_p_cp', 'p'}` as Python **lists** (the
+/// reference `reltest_dep.py` return shape).
+#[pyfunction]
+#[pyo3(signature = (model, ntrials=100, nx=30, p=None, true_params=None, init=None))]
+fn reltest_ref<'py>(
+    py: Python<'py>,
+    model: &str,
+    ntrials: usize,
+    nx: usize,
+    p: Option<PyReadonlyArray1<'py, f64>>,
+    true_params: Option<PyReadonlyArray1<'py, f64>>,
+    init: Option<PyReadonlyArray1<'py, f64>>,
+) -> PyResult<Bound<'py, PyDict>> {
+    use fitdistcp_core::reltest::{reltest, RelModel};
+    let rel_model = match model {
+        "expon" => RelModel::Expon,
+        "genextreme" => RelModel::GenExtreme,
+        "genpareto" => RelModel::GenPareto,
+        "gumbel" => RelModel::Gumbel,
+        "norm" => RelModel::Norm,
+        "gamma" => RelModel::Gamma,
+        "weibull" => RelModel::Weibull,
+        "lnorm" => RelModel::LogNormal,
+        other => {
+            return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                "unknown reltest model: {other}"
+            )))
+        }
+    };
+    let p = match p {
+        Some(v) => v.as_slice()?.to_vec(),
+        None => (1..10000).map(|i| 0.0001 * i as f64).collect(),
+    };
+    let true_params = match true_params {
+        Some(v) => v.as_slice()?.to_vec(),
+        None => default_reltest_params(rel_model),
+    };
+    let init = match init {
+        Some(v) => v.as_slice()?.to_vec(),
+        None => default_reltest_params(rel_model),
+    };
+    let res = reltest(rel_model, ntrials, nx, &p, &true_params, &init);
+    let d = PyDict::new(py);
+    d.set_item("actual_p_ml", res.actual_p_ml)?;
+    d.set_item("actual_p_cp", res.actual_p_cp)?;
+    d.set_item("p", res.p)?;
+    Ok(d)
+}
+
+/// Default true/init parameters for each `reltest` model (reference defaults).
+fn default_reltest_params(model: fitdistcp_core::reltest::RelModel) -> Vec<f64> {
+    use fitdistcp_core::reltest::RelModel::*;
+    match model {
+        Expon => vec![1.0],
+        GenExtreme => vec![0.0, 1.0, 0.0],
+        GenPareto => vec![1.0, 0.0],
+        Gumbel => vec![0.0, 1.0],
+        Norm => vec![0.0, 1.0],
+        Gamma => vec![1.0, 1.0],
+        Weibull => vec![1.0, 1.0],
+        LogNormal => vec![0.0, 1.0],
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1305,12 +2643,66 @@ fn rvs_exp<'py>(
 // ---------------------------------------------------------------------------
 
 /// Python module definition.
+///
+/// B1: the extension module is private (`fitdistcp._fitdistcp`); the public
+/// reference API is provided by the thin Python submodules under
+/// `python/fitdistcp/`. `pyproject.toml` sets `module-name =
+/// "fitdistcp._fitdistcp"`, so this must export `PyInit__fitdistcp`.
 #[pymodule]
-fn fitdistcp(m: &Bound<'_, PyModule>) -> PyResult<()> {
+fn _fitdistcp(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // Phase 0 smoke tests.
     m.add_function(wrap_pyfunction!(core_version, m)?)?;
     m.add_function(wrap_pyfunction!(add_vectors, m)?)?;
     m.add_function(wrap_pyfunction!(sum_values, m)?)?;
+
+    // B2: reference-named functions (delegated to by the Python submodules).
+    // norm
+    m.add_function(wrap_pyfunction!(ppf_norm_ref, m)?)?;
+    m.add_function(wrap_pyfunction!(pdf_norm_ref, m)?)?;
+    m.add_function(wrap_pyfunction!(cdf_norm_ref, m)?)?;
+    m.add_function(wrap_pyfunction!(rvs_norm_ref, m)?)?;
+    // expon
+    m.add_function(wrap_pyfunction!(ppf_expon_ref, m)?)?;
+    m.add_function(wrap_pyfunction!(pdf_expon_ref, m)?)?;
+    m.add_function(wrap_pyfunction!(cdf_expon_ref, m)?)?;
+    m.add_function(wrap_pyfunction!(rvs_expon_ref, m)?)?;
+    // lnorm
+    m.add_function(wrap_pyfunction!(ppf_lnorm_ref, m)?)?;
+    m.add_function(wrap_pyfunction!(pdf_lnorm_ref, m)?)?;
+    m.add_function(wrap_pyfunction!(cdf_lnorm_ref, m)?)?;
+    m.add_function(wrap_pyfunction!(rvs_lnorm_ref, m)?)?;
+    // gumbel
+    m.add_function(wrap_pyfunction!(ppf_gumbel_ref, m)?)?;
+    m.add_function(wrap_pyfunction!(pdf_gumbel_ref, m)?)?;
+    m.add_function(wrap_pyfunction!(cdf_gumbel_ref, m)?)?;
+    m.add_function(wrap_pyfunction!(rvs_gumbel_ref, m)?)?;
+    // weibull
+    m.add_function(wrap_pyfunction!(ppf_weibull_ref, m)?)?;
+    m.add_function(wrap_pyfunction!(pdf_weibull_ref, m)?)?;
+    m.add_function(wrap_pyfunction!(cdf_weibull_ref, m)?)?;
+    m.add_function(wrap_pyfunction!(rvs_weibull_ref, m)?)?;
+    // gamma
+    m.add_function(wrap_pyfunction!(ppf_gamma_ref, m)?)?;
+    m.add_function(wrap_pyfunction!(pdf_gamma_ref, m)?)?;
+    m.add_function(wrap_pyfunction!(cdf_gamma_ref, m)?)?;
+    m.add_function(wrap_pyfunction!(rvs_gamma_ref, m)?)?;
+    // genextreme
+    m.add_function(wrap_pyfunction!(ppf_genextreme_ref, m)?)?;
+    m.add_function(wrap_pyfunction!(pdf_genextreme_ref, m)?)?;
+    m.add_function(wrap_pyfunction!(cdf_genextreme_ref, m)?)?;
+    m.add_function(wrap_pyfunction!(rvs_genextreme_ref, m)?)?;
+    // genpareto
+    m.add_function(wrap_pyfunction!(ppf_genpareto_ref, m)?)?;
+    m.add_function(wrap_pyfunction!(pdf_genpareto_ref, m)?)?;
+    m.add_function(wrap_pyfunction!(cdf_genpareto_ref, m)?)?;
+    m.add_function(wrap_pyfunction!(rvs_genpareto_ref, m)?)?;
+    // genextreme_p1
+    m.add_function(wrap_pyfunction!(ppf_genextreme_p1_ref, m)?)?;
+    m.add_function(wrap_pyfunction!(pdf_genextreme_p1_ref, m)?)?;
+    m.add_function(wrap_pyfunction!(cdf_genextreme_p1_ref, m)?)?;
+    m.add_function(wrap_pyfunction!(rvs_genextreme_p1_ref, m)?)?;
+    // reltest
+    m.add_function(wrap_pyfunction!(reltest_ref, m)?)?;
 
     // norm
     m.add_function(wrap_pyfunction!(ppf_norm, m)?)?;

@@ -11,12 +11,27 @@
 
 pub mod api;
 pub mod dmgs;
+pub mod logscores;
 pub mod mle;
 pub mod models;
+pub mod reltest;
 pub mod special;
+pub mod utils;
+pub mod waic;
 
 // Re-export the key shared API types so bindings can `use fitdistcp_core::...`.
-pub use api::{predict, predict_gev, Convergence, FitResult, MleFit, PredictionRequest};
+pub use api::{
+    predict, predict_gev, predict_gev_p1, predict_norm_p1, Convergence, FitResult, MleFit,
+    NormP1Result, PredictionRequest,
+};
+// A2: WAIC (reference `utils.py::make_waic`).
+pub use waic::{make_waic, Waic};
+// A3: leave-one-out log-scores (reference `*_logscores`).
+pub use logscores::{logscores, norm_logscores, LogScores};
+// A4: reliability test (reference `reltest`).
+pub use reltest::{reltest, reltest_seeded, RelModel, RelTestResult, DEFAULT_RELTEST_SEED};
+// A7: reference utility helpers (`maket0`, `make_maic`).
+pub use utils::{make_maic, maket0, Maket0Error};
 // Re-export the interface traits defined in the module skeleton.
 pub use dmgs::{dmgs_cp_pdf, dmgs_cp_quantiles, DmgsIntegrator, DmgsModel, Integrator};
 // Derivative interface + analytic-first / numerical-fallback machinery (§4.1).

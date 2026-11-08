@@ -23,8 +23,15 @@ import fitdistcp
 
 
 def test_core_version():
-    assert isinstance(fitdistcp.core_version(), str)
-    assert fitdistcp.core_version() == "0.1.0"
+    # B6: the Python package version is pinned to the reference (0.0.4), while
+    # the core crate version is independent. Assert the core version is a
+    # non-empty semver string rather than hard-coding a specific value.
+    v = fitdistcp.core_version()
+    assert isinstance(v, str)
+    assert v, "core_version() must be a non-empty string"
+    parts = v.split(".")
+    assert len(parts) >= 2, f"core_version() must look like semver, got {v!r}"
+    assert all(p.isdigit() for p in parts[:2]), f"non-numeric semver: {v!r}"
 
 
 def test_add_vectors():
