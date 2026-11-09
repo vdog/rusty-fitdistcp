@@ -180,10 +180,24 @@ jobs:
     permissions:
       contents: write
     steps:
-      - name: Download all artifacts
+      # Download ONLY the artifacts we publish. A bare `download-artifact@v4`
+      # (no `name`/`pattern`) downloads *every* artifact in the run, which
+      # includes the Docker build-cache blob created by the `cache-to: type=gha`
+      # in the `r-tarball` job (named like
+      # `vdog~rusty-fitdistcp~EXH051.dockerbuild`). That cache blob is not a
+      # normal artifact zip, so extraction fails after 5 retries with
+      # "Unable to download and extract artifact" and fails the whole job.
+      # Filtering by `pattern` restricts the download to the real release
+      # assets (R tarball, wheels, sdist).
+      - name: Download release artifacts
         uses: actions/download-artifact@v4
         with:
           path: dist
+          pattern: |
+            r-source-tarball
+            wheels-*
+            sdist
+          merge-multiple: false
 
       - name: Create GitHub release
         uses: softprops/action-gh-release@v2
