@@ -1,27 +1,27 @@
-"""``fitdistcp`` — calibrating-prior prediction for distributions.
+"""``rusty_fitdistcp`` — calibrating-prior prediction for distributions.
 
 This is the Rust-backed drop-in replacement for the reference ``fitdistcp``
 package (v0.0.4). The public API is **submodule-based**, mirroring the
 reference:
 
-    import fitdistcp
-    fitdistcp.norm.ppf(x, p)
+    import rusty_fitdistcp
+    rusty_fitdistcp.norm.ppf(x, p)
 
-The numerics live in the compiled extension module ``fitdistcp._fitdistcp``;
+The numerics live in the compiled extension module ``rusty_fitdistcp._fitdistcp``;
 the thin Python submodules in this package provide the reference signatures,
 defaults, and return-dict keys.
 
-The legacy **flat** API (``fitdistcp.ppf_norm``, ``fitdistcp.pdf_gev``, ...) is
+The legacy **flat** API (``rusty_fitdistcp.ppf_norm``, ``rusty_fitdistcp.pdf_gev``, ...) is
 kept as deprecated aliases for backwards compatibility (see B5).
 """
 
 from . import _fitdistcp
 
 # ---------------------------------------------------------------------------
-# Reference submodules (B4). Imported eagerly so `fitdistcp.norm` etc. work
-# after a bare `import fitdistcp`.
+# Reference submodules (B4). Imported eagerly so `rusty_fitdistcp.norm` etc. work
+# after a bare `import rusty_fitdistcp`.
 # ---------------------------------------------------------------------------
-from . import (  # noqa: F401  (re-exported for `fitdistcp.<name>` access)
+from . import (  # noqa: F401  (re-exported for `rusty_fitdistcp.<name>` access)
     expon,
     gamma,
     genextreme,
@@ -128,8 +128,8 @@ def __getattr__(name):
 
         if name not in _FLAT_UNDEPRECATED:
             warnings.warn(
-                f"fitdistcp.{name} is deprecated; use the reference submodule "
-                f"API (e.g. fitdistcp.norm.ppf) instead.",
+                f"rusty_fitdistcp.{name} is deprecated; use the reference submodule "
+                f"API (e.g. rusty_fitdistcp.norm.ppf) instead.",
                 DeprecationWarning,
                 stacklevel=2,
             )

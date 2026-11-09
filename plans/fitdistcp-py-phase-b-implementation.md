@@ -4,11 +4,11 @@
 
 Make the Rust-backed Python bindings in [`crates/fitdistcp-py`](crates/fitdistcp-py/src/lib.rs:1) a drop-in replacement for the reference Python package `fitdistcp` v0.0.4 (vendored read-only at [`tools/fitdistcp-py-ref/`](tools/fitdistcp-py-ref/fitdistcp/__init__.py:1)).
 
-The reference is **submodule-based** (`fitdistcp.norm.ppf(...)`); the current binding is a **flat** API (`fitdistcp.ppf_norm(...)`). Phase A (core numerics) is complete. Phase B wires the new core APIs into the bindings.
+The reference is **submodule-based** (`rusty_fitdistcp.norm.ppf(...)`); the current binding is a **flat** API (`rusty_fitdistcp.ppf_norm(...)`). Phase A (core numerics) is complete. Phase B wires the new core APIs into the bindings.
 
 ## 2. Current State (verified)
 
-- [`pyproject.toml`](crates/fitdistcp-py/pyproject.toml:36) has **already been edited**: `module-name = "fitdistcp._fitdistcp"`, `python-source = "python"`, `version = "0.0.4"`.
+- [`pyproject.toml`](crates/fitdistcp-py/pyproject.toml:36) has **already been edited**: `module-name = "rusty_fitdistcp._fitdistcp"`, `python-source = "python"`, `version = "0.0.4"`.
 - [`lib.rs`](crates/fitdistcp-py/src/lib.rs:1309) still defines `#[pymodule] fn fitdistcp` (exports `PyInit_fitdistcp`).
 - `crates/fitdistcp-py/python/` **does not exist**.
 - The flat API (`ppf_norm`, `pdf_gev`, ...) is the only public surface.
@@ -18,7 +18,7 @@ The reference is **submodule-based** (`fitdistcp.norm.ppf(...)`); the current bi
 | # | Problem | Evidence |
 |---|---|---|
 | A | `python-source = "python"` points at a non-existent directory | `list_files` shows no `python/` under `crates/fitdistcp-py` |
-| B | `#[pymodule] fn fitdistcp` exports `PyInit_fitdistcp`, but `module-name = "fitdistcp._fitdistcp"` needs `PyInit__fitdistcp` | [`lib.rs:1308`](crates/fitdistcp-py/src/lib.rs:1308) |
+| B | `#[pymodule] fn fitdistcp` exports `PyInit_fitdistcp`, but `module-name = "rusty_fitdistcp._fitdistcp"` needs `PyInit__fitdistcp` | [`lib.rs:1308`](crates/fitdistcp-py/src/lib.rs:1308) |
 
 ### Behavioral gaps (surface once the build succeeds)
 
@@ -41,17 +41,17 @@ The reference is **submodule-based** (`fitdistcp.norm.ppf(...)`); the current bi
 
 ```mermaid
 graph TD
-    A[User code: import fitdistcp.norm] --> B[Python submodule python/fitdistcp/norm.py]
-    B --> C[Extension module fitdistcp._fitdistcp]
+    A[User code: import rusty_fitdistcp.norm] --> B[Python submodule python/rusty_fitdistcp/norm.py]
+    B --> C[Extension module rusty_fitdistcp._fitdistcp]
     C --> D[fitdistcp-core api.rs]
     D --> E[mle + dmgs + models]
     B --> F[reltest submodule]
     F --> C
-    G[python/fitdistcp/__init__.py] --> B
+    G[python/rusty_fitdistcp/__init__.py] --> B
     G --> H[flat deprecated aliases]
 ```
 
-The extension module is renamed to `fitdistcp._fitdistcp` (private). Thin Python submodules (`norm.py`, `genextreme.py`, ...) provide the reference API, delegating to the extension. Numerics stay in Rust.
+The extension module is renamed to `rusty_fitdistcp._fitdistcp` (private). Thin Python submodules (`norm.py`, `genextreme.py`, ...) provide the reference API, delegating to the extension. Numerics stay in Rust.
 
 ## 5. Phased Breakdown
 
@@ -59,12 +59,12 @@ Each phase leaves the crate **compilable and testable**. Phases B1–B2 are mech
 
 ### Phase B1 — Rename the extension module (fixes A + B)
 
-**Goal:** `import fitdistcp._fitdistcp` works; the crate builds.
+**Goal:** `import rusty_fitdistcp._fitdistcp` works; the crate builds.
 
 - Rename `#[pymodule] fn fitdistcp` → `fn _fitdistcp` in [`lib.rs`](crates/fitdistcp-py/src/lib.rs:1309).
-- Create `crates/fitdistcp-py/python/fitdistcp/__init__.py` that re-exports the flat API from `._fitdistcp` (temporary, so existing tests pass) and sets `__all__`.
+- Create `crates/fitdistcp-py/python/rusty_fitdistcp/__init__.py` that re-exports the flat API from `._fitdistcp` (temporary, so existing tests pass) and sets `__all__`.
 - Confirm `pyproject.toml` already has `module-name`/`python-source` (done).
-- **Verify:** `cargo build -p fitdistcp-py` succeeds; `maturin develop` + `import fitdistcp` works.
+- **Verify:** `cargo build -p fitdistcp-py` succeeds; `maturin develop` + `import rusty_fitdistcp` works.
 
 **Deliverable:** buildable extension under the new name; a minimal `__init__.py`.
 
@@ -124,7 +124,7 @@ Split by model family to keep each change reviewable:
 
 **Goal:** the reference import paths work.
 
-Create under `crates/fitdistcp-py/python/fitdistcp/`:
+Create under `crates/fitdistcp-py/python/rusty_fitdistcp/`:
 
 - `__init__.py` — reference `__all__` = `[genextreme, genextreme_p1, genpareto, expon, gamma, gumbel, lnorm, norm, weibull, reltest]` (do **not** include `genextreme_p12`).
 - `norm.py`, `genextreme.py`, `genpareto.py`, `expon.py`, `gamma.py`, `gumbel.py`, `lnorm.py`, `weibull.py`, `genextreme_p1.py`, `reltest.py`.
@@ -132,7 +132,7 @@ Create under `crates/fitdistcp-py/python/fitdistcp/`:
 Each submodule is a thin wrapper delegating to `_fitdistcp`, with the reference signature/defaults. Example:
 
 ```python
-# python/fitdistcp/norm.py
+# python/rusty_fitdistcp/norm.py
 import numpy as np
 from . import _fitdistcp
 
@@ -143,7 +143,7 @@ def ppf(x, p=np.arange(0.1, 1.0, 0.1), means=False, waicscores=False,
                                ru_nsamples=ru_nsamples, unbiasedv=unbiasedv)
 ```
 
-**Verify:** `import fitdistcp.norm; fitdistcp.norm.ppf(x)` works.
+**Verify:** `import rusty_fitdistcp.norm; rusty_fitdistcp.norm.ppf(x)` works.
 
 ### Phase B5 — Flat API as deprecated aliases (fixes F, part 3)
 
@@ -153,17 +153,17 @@ def ppf(x, p=np.arange(0.1, 1.0, 0.1), means=False, waicscores=False,
 - Emit a `DeprecationWarning` where practical (e.g. a module-level `__getattr__` that warns on flat-name access, or a thin wrapper).
 - Keep the existing tests ([`test_api.py`](crates/fitdistcp-py/tests/test_api.py:1), [`test_examples.py`](crates/fitdistcp-py/tests/test_examples.py:1)) passing.
 
-**Verify:** `fitdistcp.ppf_norm(...)` still works and warns.
+**Verify:** `rusty_fitdistcp.ppf_norm(...)` still works and warns.
 
 ### Phase B6 — Packaging (fixes B5)
 
 **Goal:** ship the Python package.
 
-- Confirm `pyproject.toml`: `module-name = "fitdistcp._fitdistcp"`, `python-source = "python"`.
+- Confirm `pyproject.toml`: `module-name = "rusty_fitdistcp._fitdistcp"`, `python-source = "python"`.
 - Reconcile the version: `pyproject.toml` says `0.0.4`; the workspace Cargo says `0.1.0`; [`test_core_version`](crates/fitdistcp-py/tests/test_api.py:25) asserts `"0.1.0"`. **Decision:** keep the Python package version at `0.0.4` (reference parity) and update the test to assert the core version independently, or set both to the same value. Document the choice.
 - Align `dependencies` with the reference (`numpy`).
 
-**Verify:** `maturin build` produces a wheel containing `fitdistcp/__init__.py` + `fitdistcp/_fitdistcp.*.so`.
+**Verify:** `maturin build` produces a wheel containing `rusty_fitdistcp/__init__.py` + `rusty_fitdistcp/_fitdistcp.*.so`.
 
 ### Phase B7 — Verification
 
@@ -172,7 +172,7 @@ def ppf(x, p=np.arange(0.1, 1.0, 0.1), means=False, waicscores=False,
 - `cargo build -p fitdistcp-py` succeeds.
 - `cargo clippy -p fitdistcp-py` is clean.
 - Build with maturin **in the Docker container** (per [`AGENTS.MD`](AGENTS.MD:1) — do not install tools on the host).
-- `import fitdistcp; fitdistcp.norm.ppf(...)` works.
+- `import rusty_fitdistcp; rusty_fitdistcp.norm.ppf(...)` works.
 - Run the existing pytest suite.
 - Report via `attempt_completion`.
 

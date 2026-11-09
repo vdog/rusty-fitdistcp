@@ -1,7 +1,7 @@
 """Normal distribution predictions based on a calibrating prior.
 
 Drop-in replacement for the reference ``fitdistcp.norm`` submodule. Delegates to
-the compiled extension ``fitdistcp._fitdistcp``.
+the compiled extension ``rusty_fitdistcp._fitdistcp``.
 """
 
 import numpy as np

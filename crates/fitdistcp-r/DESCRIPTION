@@ -1,8 +1,8 @@
-Package: fitdistcp
+Package: rusty.fitdistcp
 Title: Calibrating Prior Prediction for Distributions (Rust Port)
 Version: 0.1.0
 Authors@R:
-    person("fitdistcp", "authors", email = "noreply@example.com", role = c("aut", "cre"))
+    person("rusty.fitdistcp", "authors", email = "noreply@example.com", role = c("aut", "cre"))
 Description: Rust-backed implementation of calibrating prior prediction (CP)
     for a representative set of distributions, exposed to R via extendr.
     Provides the reference d/p/q/r + t***_cp API for the ten Phase-1 models

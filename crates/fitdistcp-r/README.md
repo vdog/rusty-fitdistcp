@@ -1,4 +1,4 @@
-# fitdistcp (R bindings)
+# rusty.fitdistcp (R bindings)
 
 extendr bindings over `fitdistcp-core`. The R package is a **drop-in
 replacement** for the reference R `fitdistcp` API: it provides the `d/p/q/r`
@@ -27,18 +27,18 @@ binding). The R-specific paths are below.
 
 ### End-user install (from a GitHub release)
 
-Download the source tarball (`fitdistcp_*.tar.gz`) from the
+Download the source tarball (`rusty.fitdistcp_*.tar.gz`) from the
 [GitHub releases page](https://github.com/stephenjewson/fitdistcp/releases), then:
 
 ```sh
 # Requires R >= 4.0 and a Rust toolchain (cargo + rustc >= 1.85) on PATH.
-R CMD INSTALL fitdistcp_0.1.0.tar.gz
+R CMD INSTALL rusty.fitdistcp_0.1.0.tar.gz
 ```
 
 Or from within R:
 
 ```r
-install.packages("fitdistcp_0.1.0.tar.gz", repos = NULL, type = "source")
+install.packages("rusty.fitdistcp_0.1.0.tar.gz", repos = NULL, type = "source")
 ```
 
 The tarball ships the Rust crates **vendored** (via
@@ -51,7 +51,7 @@ there is no CRAN publishing step.
 Verify the drop-in install:
 
 ```r
-library(fitdistcp)
+library(rusty.fitdistcp)
 qnorm_cp(c(0.1, 0.5, 0.9), x = c(-1, 0, 1))
 ```
 

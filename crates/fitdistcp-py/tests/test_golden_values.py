@@ -34,13 +34,13 @@ Run inside the dev container after ``maturin develop``::
 import numpy as np
 import pytest
 
-import fitdistcp
-import fitdistcp.expon
-import fitdistcp.gamma
-import fitdistcp.gumbel
-import fitdistcp.lnorm
-import fitdistcp.norm
-import fitdistcp.weibull
+import rusty_fitdistcp
+import rusty_fitdistcp.expon
+import rusty_fitdistcp.gamma
+import rusty_fitdistcp.gumbel
+import rusty_fitdistcp.lnorm
+import rusty_fitdistcp.norm
+import rusty_fitdistcp.weibull
 
 
 # ---------------------------------------------------------------------------
@@ -192,12 +192,12 @@ GOLDEN = {
 
 # The model module for each golden key.
 _MODULES = {
-    "norm": fitdistcp.norm,
-    "expon": fitdistcp.expon,
-    "lnorm": fitdistcp.lnorm,
-    "gumbel": fitdistcp.gumbel,
-    "weibull": fitdistcp.weibull,
-    "gamma": fitdistcp.gamma,
+    "norm": rusty_fitdistcp.norm,
+    "expon": rusty_fitdistcp.expon,
+    "lnorm": rusty_fitdistcp.lnorm,
+    "gumbel": rusty_fitdistcp.gumbel,
+    "weibull": rusty_fitdistcp.weibull,
+    "gamma": rusty_fitdistcp.gamma,
 }
 
 
@@ -347,7 +347,7 @@ def test_norm_standard_errors_match_inverse_information():
     errors are the square roots of those.
     """
     g = GOLDEN["norm"]
-    res = fitdistcp.norm.ppf(g["y"], P_GRID)
+    res = rusty_fitdistcp.norm.ppf(g["y"], P_GRID)
     n = g["y"].size
     mu, sigma = res["ml_params"]
     se = np.asarray(res["standard_errors"], dtype=float)

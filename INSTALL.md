@@ -1,4 +1,4 @@
-# Installing `fitdistcp` (Rust port)
+# Installing `rusty-fitdistcp` (Rust port)
 
 This guide covers installing the Rust-backed `fitdistcp` bindings as **drop-in
 replacements** for the reference R and Python packages.
@@ -21,7 +21,7 @@ There are two supported install paths for each language:
 | I want to… | Language | Path | Artifact |
 |---|---|---|---|
 | Use the package in my own project | Python | [End-user (Python)](#python-end-user-install) | `*.whl` wheel or `*.tar.gz` sdist |
-| Use the package in my own project | R | [End-user (R)](#r-end-user-install) | `fitdistcp_*.tar.gz` source tarball |
+| Use the package in my own project | R | [End-user (R)](#r-end-user-install) | `rusty.fitdistcp_*.tar.gz` source tarball |
 | Develop / run the test suite | Python | [Dev container (Python)](#python-dev-container-install) | `maturin develop` |
 | Develop / run the test suite | R | [Dev container (R)](#r-dev-container-install) | `devtools::load_all()` |
 
@@ -54,29 +54,29 @@ install it into your environment:
 
 ```sh
 # From a downloaded wheel (recommended — no Rust toolchain needed).
-pip install ./fitdistcp-0.0.4-cp312-cp312-manylinux_2_17_x86_64.whl
+pip install ./rusty_fitdistcp-0.0.4-cp312-cp312-manylinux_2_17_x86_64.whl
 
 # Or from the source distribution (requires a Rust toolchain + maturin).
-pip install ./fitdistcp-0.0.4.tar.gz
+pip install ./rusty_fitdistcp-0.0.4.tar.gz
 ```
 
-The package installs as `fitdistcp` and is a **drop-in replacement** for the
+The package installs as `rusty_fitdistcp` and is a **drop-in replacement** for the
 reference `fitdistcp` v0.0.4 Python package: the submodule API, function
 signatures/defaults, and return-dict keys match the reference.
 
 ### Verify the drop-in install
 
 ```python
-import fitdistcp
+import rusty_fitdistcp
 
 # Submodule API (reference-compatible).
-fitdistcp.norm.ppf([1.0, 2.0, 3.0], p=[0.1, 0.5, 0.9])
-fitdistcp.genextreme.ppf([1.0, 2.0, 3.0], p=0.5)
-fitdistcp.genpareto.pdf([1.0, 2.0, 3.0], [1.0, 2.0, 3.0])
-fitdistcp.reltest([1.0, 2.0, 3.0])
+rusty_fitdistcp.norm.ppf([1.0, 2.0, 3.0], p=[0.1, 0.5, 0.9])
+rusty_fitdistcp.genextreme.ppf([1.0, 2.0, 3.0], p=0.5)
+rusty_fitdistcp.genpareto.pdf([1.0, 2.0, 3.0], [1.0, 2.0, 3.0])
+rusty_fitdistcp.reltest([1.0, 2.0, 3.0])
 ```
 
-The legacy **flat** API (`fitdistcp.ppf_norm`, `fitdistcp.pdf_gev`, ...) is
+The legacy **flat** API (`rusty_fitdistcp.ppf_norm`, `rusty_fitdistcp.pdf_gev`, ...) is
 retained as deprecated aliases and emits a `DeprecationWarning`; new code should
 use the submodule API. See
 [`crates/fitdistcp-py/README.md`](crates/fitdistcp-py/README.md:1) for the full
@@ -96,10 +96,10 @@ docker compose run --rm dev bash -lc \
    && pip install --quiet numpy pytest && maturin develop --quiet && pytest"
 ```
 
-`maturin develop` compiles the PyO3 extension (`fitdistcp._fitdistcp`) and
+`maturin develop` compiles the PyO3 extension (`rusty_fitdistcp._fitdistcp`) and
 installs the thin Python submodules from
-[`python/fitdistcp/`](crates/fitdistcp-py/python/fitdistcp/__init__.py:1) into the
-active virtualenv. After it completes, `import fitdistcp` works in that venv.
+[`python/rusty_fitdistcp/`](crates/fitdistcp-py/python/rusty_fitdistcp/__init__.py:1) into the
+active virtualenv. After it completes, `import rusty_fitdistcp` works in that venv.
 
 To build a distributable wheel locally:
 
@@ -110,19 +110,19 @@ docker compose run --rm dev bash -lc \
 
 ## R: end-user install
 
-Download the source tarball (`fitdistcp_*.tar.gz`) from the
+Download the source tarball (`rusty.fitdistcp_*.tar.gz`) from the
 [GitHub releases page](https://github.com/stephenjewson/fitdistcp/releases), then
 install it:
 
 ```sh
 # Requires R >= 4.0 and a Rust toolchain (cargo + rustc >= 1.85) on PATH.
-R CMD INSTALL fitdistcp_0.1.0.tar.gz
+R CMD INSTALL rusty.fitdistcp_0.1.0.tar.gz
 ```
 
 Or from within R:
 
 ```r
-install.packages("fitdistcp_0.1.0.tar.gz", repos = NULL, type = "source")
+install.packages("rusty.fitdistcp_0.1.0.tar.gz", repos = NULL, type = "source")
 ```
 
 The tarball ships the Rust crates **vendored** (via
@@ -138,7 +138,7 @@ all ten Phase-1 models (53 exported functions).
 ### Verify the drop-in install
 
 ```r
-library(fitdistcp)
+library(rusty.fitdistcp)
 
 # d/p/q/r family plus the calibrated-prior entry point.
 dnorm_cp(0, x = c(-1, 0, 1))
@@ -200,14 +200,14 @@ Prebuilt wheels are published for CPython **3.9–3.14** on manylinux, macOS
 (Intel + Apple Silicon), and Windows. The package itself supports CPython
 **>= 3.9** (`requires-python = ">=3.9"`), so newer versions work too — they
 just have no prebuilt wheel yet. If no wheel matches your platform or Python
-version, install from the **sdist** (`pip install ./fitdistcp-*.tar.gz`), which
+version, install from the **sdist** (`pip install ./rusty_fitdistcp-*.tar.gz`), which
 requires a Rust toolchain and `maturin`.
 
 ### Python: `DeprecationWarning` on a flat name
 
-Accessing a legacy flat name (e.g. `fitdistcp.ppf_norm`) emits a
+Accessing a legacy flat name (e.g. `rusty_fitdistcp.ppf_norm`) emits a
 `DeprecationWarning` and forwards to the corresponding submodule function. Switch
-to the submodule API (`fitdistcp.norm.ppf(...)`).
+to the submodule API (`rusty_fitdistcp.norm.ppf(...)`).
 
 ### Python test suite: one skipped test
 

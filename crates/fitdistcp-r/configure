@@ -1,5 +1,5 @@
 #!/bin/sh
-# W21 packaging — configure script for the fitdistcp R package.
+# W21 packaging — configure script for the rusty.fitdistcp R package.
 #
 # CRAN policy (§11 of the design) requires the package to build in isolation
 # from a tarball, with no access to the repository's top-level Cargo workspace.

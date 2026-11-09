@@ -6,7 +6,7 @@
 # fitdistcp_params`. This file is hand-written (not generated) and is the single
 # source of truth for the shared argument documentation.
 
-#' Shared parameters for the fitdistcp CP functions
+#' Shared parameters for the rusty.fitdistcp CP functions
 #'
 #' Documentation for the arguments shared by the `d/p/q/r/t***_cp` functions.
 #' These are not called directly; they are inherited by the model wrappers.

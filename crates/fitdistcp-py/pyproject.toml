@@ -3,7 +3,7 @@ requires = ["maturin>=1.5,<2.0"]
 build-backend = "maturin"
 
 [project]
-name = "fitdistcp"
+name = "rusty_fitdistcp"
 version = "0.0.4"
 description = "Calibrating prior prediction for distributions (Rust port, Python bindings)."
 readme = "README.md"
@@ -59,9 +59,9 @@ Repository = "https://github.com/stephenjewson/fitdistcp"
 test = ["pytest>=7.0"]
 
 [tool.maturin]
-# B1: the extension module is private (`fitdistcp._fitdistcp`); the public API is
-# provided by the thin Python submodules under `python/fitdistcp/` (B3).
-module-name = "fitdistcp._fitdistcp"
+# B1: the extension module is private (`rusty_fitdistcp._fitdistcp`); the public API is
+# provided by the thin Python submodules under `python/rusty_fitdistcp/` (B3).
+module-name = "rusty_fitdistcp._fitdistcp"
 # B5: ship the Python package alongside the compiled extension.
 python-source = "python"
 manifest-path = "Cargo.toml"
@@ -101,11 +101,11 @@ build = "cp39-* cp310-* cp311-* cp312-* cp313-* cp314-*"
 skip = "*-musllinux_*"
 # Run the test suite against each built wheel.
 #
-# DIAG: print the resolved NumPy build before importing fitdistcp. A NumPy built
+# DIAG: print the resolved NumPy build before importing rusty_fitdistcp. A NumPy built
 # from source with MINGW-W64 on Windows crashes the interpreter on import with
 # an access violation (0xC0000005 / exit 3221225477), so we log the NumPy
 # version + file path to confirm which build the test venv picked up.
-test-command = "python -c \"import sys; print('DIAG python', sys.version); import numpy; print('DIAG numpy', numpy.__version__, numpy.__file__); import fitdistcp; print(fitdistcp.__version__ if hasattr(fitdistcp, '__version__') else 'ok')\""
+test-command = "python -c \"import sys; print('DIAG python', sys.version); import numpy; print('DIAG numpy', numpy.__version__, numpy.__file__); import rusty_fitdistcp; print(rusty_fitdistcp.__version__ if hasattr(rusty_fitdistcp, '__version__') else 'ok')\""
 # Match the per-Python-version NumPy constraint from `dependencies` above:
 # cibuildwheel installs test-requires into the test venv, so an unbounded numpy
 # would pull a version with no manylinux2014 wheel (source-build failure on the

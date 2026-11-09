@@ -27,7 +27,7 @@ Run inside the dev container after `maturin develop`:
 import numpy as np
 import pytest
 
-import fitdistcp
+import rusty_fitdistcp
 
 
 # ---------------------------------------------------------------------------
@@ -38,7 +38,7 @@ import fitdistcp
 #   x_range = np.arange(-3, 3, 0.1)
 #   pdf = fitdistcp.norm.pdf(x, y=x_range)['cp_pdf']
 #
-# Maps to the Rust-backed `fitdistcp.pdf_norm(x, y)`.
+# Maps to the Rust-backed `rusty_fitdistcp.pdf_norm(x, y)`.
 # ---------------------------------------------------------------------------
 
 EX1_X = np.array([
@@ -51,7 +51,7 @@ EX1_X = np.array([
 
 def test_python_example_1_norm_pdf():
     x_range = np.arange(-3, 3, 0.1)
-    res = fitdistcp.pdf_norm(EX1_X, x_range)
+    res = rusty_fitdistcp.pdf_norm(EX1_X, x_range)
 
     assert "cp_pdf" in res and "ml_pdf" in res
     assert res["cp_pdf"].shape == x_range.shape
@@ -90,7 +90,7 @@ def test_python_example_1_norm_pdf():
 #   q = fitdistcp.genextreme.ppf(x, p=p)
 #   plt.plot(q['cp_quantiles'], p); plt.plot(q['ml_quantiles'], p)
 #
-# Maps to the Rust-backed `fitdistcp.ppf_gev(x, p)`.
+# Maps to the Rust-backed `rusty_fitdistcp.ppf_gev(x, p)`.
 # ---------------------------------------------------------------------------
 
 EX2_X = np.array([
@@ -103,7 +103,7 @@ EX2_X = np.array([
 
 def test_python_example_2_gev_ppf():
     p = np.arange(0.01, 1.0, 0.01)
-    res = fitdistcp.ppf_gev(EX2_X, p)
+    res = rusty_fitdistcp.ppf_gev(EX2_X, p)
 
     assert "ml_quantiles" in res and "cp_quantiles" in res
     assert res["ml_quantiles"].shape == p.shape
@@ -131,7 +131,7 @@ def test_python_example_2_gev_ppf():
 #   r = fitdistcp.gumbel.rvs(10, x)
 #   print(r['cp_deviates'])
 #
-# Maps to the Rust-backed `fitdistcp.rvs_gumbel(n, x)`.
+# Maps to the Rust-backed `rusty_fitdistcp.rvs_gumbel(n, x)`.
 # ---------------------------------------------------------------------------
 
 EX3_X = np.array([
@@ -143,7 +143,7 @@ EX3_X = np.array([
 
 
 def test_python_example_3_gumbel_rvs():
-    res = fitdistcp.rvs_gumbel(10, EX3_X)
+    res = rusty_fitdistcp.rvs_gumbel(10, EX3_X)
 
     assert "ml_deviates" in res and "cp_deviates" in res
     assert res["ml_deviates"].shape == (10,)
@@ -171,7 +171,7 @@ def test_python_example_3_gumbel_rvs():
 #   q = fitdistcp.genextreme_p1.ppf(x, t, t0 = 21)
 #   print(q['cp_quantiles'])
 #
-# Maps to the Rust-backed `fitdistcp.ppf_gev_p1(x, p, t=..., t0=...)`.
+# Maps to the Rust-backed `rusty_fitdistcp.ppf_gev_p1(x, p, t=..., t0=...)`.
 # ---------------------------------------------------------------------------
 
 EX4_X = np.array([
@@ -186,7 +186,7 @@ def test_python_example_4_gev_p1_ppf():
     # The reference example prints `cp_quantiles` at the default p grid; we use
     # an explicit grid so the assertion is well-defined.
     p = np.array([0.1, 0.5, 0.9])
-    res = fitdistcp.ppf_gev_p1(EX4_X, p, t=EX4_T, t0=21.0)
+    res = rusty_fitdistcp.ppf_gev_p1(EX4_X, p, t=EX4_T, t0=21.0)
 
     assert "cp_quantiles" in res and "ml_quantiles" in res
     assert res["ml_params"].shape == (4,)
@@ -208,7 +208,7 @@ def test_python_example_4_gev_p1_ppf():
 #   q = fitdistcp.weibull.ppf(x)
 #   print(f'maxlik:c = {q["ml_params"][0]}, scale = {q["ml_params"][1]}')
 #
-# Maps to the Rust-backed `fitdistcp.ppf_weibull(x, p)`. The reference example
+# Maps to the Rust-backed `rusty_fitdistcp.ppf_weibull(x, p)`. The reference example
 # uses random data (`scipy.stats.weibull_min.rvs`); we substitute a fixed
 # Weibull sample (shape = 0.5, scale = 2) so the MLE is deterministic and can
 # be checked against the known generating parameters.
@@ -256,7 +256,7 @@ def test_python_example_5_weibull_ml_params():
     # The reference example only reads `ml_params`; `p` does not affect the fit,
     # so any valid grid works.
     p = np.array([0.1, 0.5, 0.9])
-    res = fitdistcp.ppf_weibull(EX5_X, p)
+    res = rusty_fitdistcp.ppf_weibull(EX5_X, p)
 
     assert res["ml_params"].shape == (2,)
     shape, scale = res["ml_params"]

@@ -4,15 +4,15 @@
 
 Make the Rust-backed Python bindings in [`crates/fitdistcp-py`](crates/fitdistcp-py/src/lib.rs:1) a **drop-in replacement** for the reference Python package `fitdistcp` v0.0.4 (`https://github.com/lynnejewson/fitdistcp`), which is vendored read-only at [`tools/fitdistcp-py-ref/`](tools/fitdistcp-py-ref/README.md:1).
 
-"Drop-in" means: existing user code that does `import fitdistcp.norm` and calls `fitdistcp.norm.ppf(x, p=...)` must work unchanged, with reference-compatible signatures, defaults, return-dict keys/shapes, and numerics.
+"Drop-in" means: existing user code that does `import rusty_fitdistcp.norm` and calls `rusty_fitdistcp.norm.ppf(x, p=...)` must work unchanged, with reference-compatible signatures, defaults, return-dict keys/shapes, and numerics.
 
 Per user decision, this is a **full drop-in AND real core implementations** of the gaps (not placeholders): `reltest`, WAIC/log-scores, `ml_mean`/`cp_mean`, gamma `(shape, scale)` parameterization, `norm_p1` unbiased sigma, and `genextreme_p12`.
 
 ## 2. Key Findings (from reconnaissance)
 
-- The reference package is **submodule-based**: `fitdistcp.norm`, `fitdistcp.genextreme`, `fitdistcp.genpareto`, `fitdistcp.expon`, `fitdistcp.gamma`, `fitdistcp.gumbel`, `fitdistcp.lnorm`, `fitdistcp.weibull`, `fitdistcp.genextreme_p1`, `fitdistcp.genextreme_p12`, `fitdistcp.reltest` (see [`__init__.py`](tools/fitdistcp-py-ref/fitdistcp/__init__.py:9)).
+- The reference package is **submodule-based**: `rusty_fitdistcp.norm`, `rusty_fitdistcp.genextreme`, `rusty_fitdistcp.genpareto`, `rusty_fitdistcp.expon`, `rusty_fitdistcp.gamma`, `rusty_fitdistcp.gumbel`, `rusty_fitdistcp.lnorm`, `rusty_fitdistcp.weibull`, `rusty_fitdistcp.genextreme_p1`, `rusty_fitdistcp.genextreme_p12`, `rusty_fitdistcp.reltest` (see [`__init__.py`](tools/fitdistcp-py-ref/fitdistcp/__init__.py:9)).
 - Each model module exposes `ppf`, `pdf`, `cdf`, `rvs`, and (most) `reltest`.
-- The current binding is a **flat** API (`fitdistcp.pdf_norm`, `fitdistcp.ppf_gev`, ...) — fundamentally incompatible.
+- The current binding is a **flat** API (`rusty_fitdistcp.pdf_norm`, `rusty_fitdistcp.ppf_gev`, ...) — fundamentally incompatible.
 - The current binding's module docs incorrectly claim the reference is R-only ([`lib.rs`](crates/fitdistcp-py/src/lib.rs:16)).
 - Core gaps: no `reltest`, no WAIC/log-scores (`waic`/`log_scores` hard-coded `None` at [`api.rs`](crates/fitdistcp-core/src/api.rs:173)), no `ml_mean`/`cp_mean`, no `genextreme_p12`, gamma uses `(shape, rate)` not `(shape, scale)`, `norm_p1` sigma uses MLE `n` not unbiased `n-1`.
 
@@ -22,17 +22,17 @@ Per user decision, this is a **full drop-in AND real core implementations** of t
 
 | Reference module | Model | Core model type |
 |---|---|---|
-| `fitdistcp.norm` | Normal | [`Normal`](crates/fitdistcp-core/src/models/norm.rs:1) |
-| `fitdistcp.genextreme` | GEV | [`GenExtreme`](crates/fitdistcp-core/src/models/genextreme.rs:1) |
-| `fitdistcp.genpareto` | GPD | [`GenPareto`](crates/fitdistcp-core/src/models/genpareto.rs:1) |
-| `fitdistcp.expon` | Exponential | [`Exponential`](crates/fitdistcp-core/src/models/expon.rs:1) |
-| `fitdistcp.gamma` | Gamma | [`Gamma`](crates/fitdistcp-core/src/models/gamma.rs:1) |
-| `fitdistcp.gumbel` | Gumbel | [`Gumbel`](crates/fitdistcp-core/src/models/gumbel.rs:1) |
-| `fitdistcp.lnorm` | Log-normal | [`LogNormal`](crates/fitdistcp-core/src/models/lnorm.rs:1) |
-| `fitdistcp.weibull` | Weibull | [`Weibull`](crates/fitdistcp-core/src/models/weibull.rs:1) |
-| `fitdistcp.genextreme_p1` | GEV + 1 predictor | [`GenExtremeP1`](crates/fitdistcp-core/src/models/genextreme_p1.rs:1) |
-| `fitdistcp.genextreme_p12` | GEV + 2 predictors | (new core model) |
-| `fitdistcp.reltest` | reliability test | (new core routine) |
+| `rusty_fitdistcp.norm` | Normal | [`Normal`](crates/fitdistcp-core/src/models/norm.rs:1) |
+| `rusty_fitdistcp.genextreme` | GEV | [`GenExtreme`](crates/fitdistcp-core/src/models/genextreme.rs:1) |
+| `rusty_fitdistcp.genpareto` | GPD | [`GenPareto`](crates/fitdistcp-core/src/models/genpareto.rs:1) |
+| `rusty_fitdistcp.expon` | Exponential | [`Exponential`](crates/fitdistcp-core/src/models/expon.rs:1) |
+| `rusty_fitdistcp.gamma` | Gamma | [`Gamma`](crates/fitdistcp-core/src/models/gamma.rs:1) |
+| `rusty_fitdistcp.gumbel` | Gumbel | [`Gumbel`](crates/fitdistcp-core/src/models/gumbel.rs:1) |
+| `rusty_fitdistcp.lnorm` | Log-normal | [`LogNormal`](crates/fitdistcp-core/src/models/lnorm.rs:1) |
+| `rusty_fitdistcp.weibull` | Weibull | [`Weibull`](crates/fitdistcp-core/src/models/weibull.rs:1) |
+| `rusty_fitdistcp.genextreme_p1` | GEV + 1 predictor | [`GenExtremeP1`](crates/fitdistcp-core/src/models/genextreme_p1.rs:1) |
+| `rusty_fitdistcp.genextreme_p12` | GEV + 2 predictors | (new core model) |
+| `rusty_fitdistcp.reltest` | reliability test | (new core routine) |
 
 ### 3.2 Per-module function signatures (reference)
 
@@ -87,15 +87,15 @@ Representative (full table captured in recon report):
 
 ```mermaid
 graph TD
-    A[User code: import fitdistcp.norm] --> B[Python submodule fitdistcp/norm.py]
-    B --> C[Extension module fitdistcp._fitdistcp]
+    A[User code: import rusty_fitdistcp.norm] --> B[Python submodule rusty_fitdistcp/norm.py]
+    B --> C[Extension module rusty_fitdistcp._fitdistcp]
     C --> D[fitdistcp-core api.rs]
     D --> E[mle + dmgs + models]
     B --> F[reltest submodule]
     F --> C
 ```
 
-The extension module is renamed to `fitdistcp._fitdistcp` (private), and thin Python submodules (`norm.py`, `genextreme.py`, ...) provide the reference API, delegating to the extension. This keeps numerics in Rust while matching the reference import paths.
+The extension module is renamed to `rusty_fitdistcp._fitdistcp` (private), and thin Python submodules (`norm.py`, `genextreme.py`, ...) provide the reference API, delegating to the extension. This keeps numerics in Rust while matching the reference import paths.
 
 ## 6. Implementation Steps
 
@@ -112,16 +112,16 @@ The extension module is renamed to `fitdistcp._fitdistcp` (private), and thin Py
 
 ### Phase B — Python bindings (fitdistcp-py)
 
-9. **B1. Rename extension module** to `fitdistcp._fitdistcp` in [`pyproject.toml`](crates/fitdistcp-py/pyproject.toml:6) and [`lib.rs`](crates/fitdistcp-py/src/lib.rs:1309).
+9. **B1. Rename extension module** to `rusty_fitdistcp._fitdistcp` in [`pyproject.toml`](crates/fitdistcp-py/pyproject.toml:6) and [`lib.rs`](crates/fitdistcp-py/src/lib.rs:1309).
 10. **B2. Add reference-named extension functions** (`ppf`, `pdf`, `cdf`, `rvs`, `reltest` per model) with reference signatures/defaults, returning reference-shaped dicts.
-11. **B3. Add Python submodules** `fitdistcp/norm.py`, `genextreme.py`, `genpareto.py`, `expon.py`, `gamma.py`, `gumbel.py`, `lnorm.py`, `weibull.py`, `genextreme_p1.py`, `genextreme_p12.py`, `reltest.py`, and `__init__.py` with the reference `__all__`.
+11. **B3. Add Python submodules** `rusty_fitdistcp/norm.py`, `genextreme.py`, `genpareto.py`, `expon.py`, `gamma.py`, `gumbel.py`, `lnorm.py`, `weibull.py`, `genextreme_p1.py`, `genextreme_p12.py`, `reltest.py`, and `__init__.py` with the reference `__all__`.
 12. **B4. Keep flat API as deprecated aliases** (`pdf_norm`, `ppf_gev`, ...) for backward compatibility.
 13. **B5. Update `pyproject.toml`** to ship the Python package (maturin `python-source` layout) and match reference metadata.
 
 ### Phase C — Tests & verification
 
 14. **C1. Port reference tests** ([`test.py`](tools/fitdistcp-py-ref/fitdistcp/test.py:1), [`test_example_data.py`](tools/fitdistcp-py-ref/fitdistcp/test_example_data.py:1), [`test_reltest.py`](tools/fitdistcp-py-ref/fitdistcp/test_reltest.py:1)) into [`crates/fitdistcp-py/tests/`](crates/fitdistcp-py/tests/test_api.py:1).
-15. **C2. Add a drop-in compatibility test** that imports `fitdistcp.norm` and calls the reference signatures.
+15. **C2. Add a drop-in compatibility test** that imports `rusty_fitdistcp.norm` and calls the reference signatures.
 16. **C3. Add golden-value tests** comparing core outputs to reference outputs for each model.
 17. **C4. Update [`tools/bench/bench_ref_py.py`](tools/bench/bench_ref_py.py:1)** to run against the new binding and confirm parity.
 
@@ -129,7 +129,7 @@ The extension module is renamed to `fitdistcp._fitdistcp` (private), and thin Py
 
 - **Numerical parity for WAIC/log-scores/reltest** is the highest risk (complex DMGS expansions). Mitigation: port reference code faithfully and add golden tests against the vendored reference.
 - **`genextreme_p12`** is a substantial new model. Mitigation: implement incrementally with the reference as the oracle.
-- **Package name collision** (`fitdistcp`): the new package must fully replace the reference import paths. Mitigation: private extension module + public submodules.
+- **Package name collision** (`rusty_fitdistcp`): the new package must fully replace the reference import paths. Mitigation: private extension module + public submodules.
 - **`rusampling`/`ru`**: reference uses `rusampling.Ru`. Mitigation: expose `ru` args; implement or return the reference `"ru not selected"` string where the core cannot yet compute.
 
 ## 8. Open Items to Confirm During Implementation

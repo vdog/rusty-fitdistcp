@@ -4,10 +4,10 @@
 
 #
 # This file was created with the following call:
-#   .Call("wrap__make_fitdistcp_wrappers", use_symbols = TRUE, package_name = "fitdistcp")
+#   .Call("wrap__make_fitdistcp_wrappers", use_symbols = TRUE, package_name = "rusty.fitdistcp")
 
 #' @usage NULL
-#' @useDynLib fitdistcp, .registration = TRUE
+#' @useDynLib rusty.fitdistcp, .registration = TRUE
 NULL
 
 #' Return the core crate version string.

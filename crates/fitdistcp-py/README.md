@@ -1,14 +1,14 @@
-# fitdistcp (Python bindings)
+# rusty_fitdistcp (Python bindings)
 
 PyO3 bindings over `fitdistcp-core`. The Python package is a **drop-in
 replacement** for the reference Python package `fitdistcp` v0.0.4: it exposes the
-same **submodule-based** public API (`fitdistcp.norm.ppf(...)`,
-`fitdistcp.genextreme.ppf(...)`, ...) with the reference signatures, defaults,
+same **submodule-based** public API (`rusty_fitdistcp.norm.ppf(...)`,
+`rusty_fitdistcp.genextreme.ppf(...)`, ...) with the reference signatures, defaults,
 and return-dict keys.
 
-The compiled extension module is private (`fitdistcp._fitdistcp`); the public
+The compiled extension module is private (`rusty_fitdistcp._fitdistcp`); the public
 surface is the set of thin Python submodules under
-[`python/fitdistcp/`](python/fitdistcp/__init__.py:1).
+[`python/rusty_fitdistcp/`](python/rusty_fitdistcp/__init__.py:1).
 
 ## Relationship to the reference Python package
 
@@ -26,13 +26,13 @@ that mirror the reference surface.
 The public API is submodule-based, mirroring the reference package:
 
 ```python
-import fitdistcp
+import rusty_fitdistcp
 
-fitdistcp.norm.ppf([1.0, 2.0, 3.0], p=[0.1, 0.5, 0.9])
-fitdistcp.genextreme.ppf(x, p=0.5)
-fitdistcp.genpareto.pdf(x, y)
-fitdistcp.expon.rvs(n=100, x=x)
-fitdistcp.reltest(x)
+rusty_fitdistcp.norm.ppf([1.0, 2.0, 3.0], p=[0.1, 0.5, 0.9])
+rusty_fitdistcp.genextreme.ppf(x, p=0.5)
+rusty_fitdistcp.genpareto.pdf(x, y)
+rusty_fitdistcp.expon.rvs(n=100, x=x)
+rusty_fitdistcp.reltest(x)
 ```
 
 Each distribution submodule exposes `ppf` / `pdf` / `cdf` / `rvs` (and
@@ -65,13 +65,13 @@ level(s), and `n` is the number of deviates.
 | `genextreme_p1`    | GEV + predictor                |
 | `reltest`          | Relative-likelihood test       |
 
-`fitdistcp.__all__` is
+`rusty_fitdistcp.__all__` is
 `[genextreme, genextreme_p1, genpareto, expon, gamma, gumbel, lnorm, norm, weibull, reltest]`
 (note: `genextreme_p12` is deferred and omitted).
 
 ## Flat API (deprecated aliases)
 
-The previous flat API (`fitdistcp.ppf_norm`, `fitdistcp.pdf_gev`, ...) is
+The previous flat API (`rusty_fitdistcp.ppf_norm`, `rusty_fitdistcp.pdf_gev`, ...) is
 **retained as deprecated aliases**. Accessing a flat name emits a
 `DeprecationWarning` (via a module-level `__getattr__`) and forwards to the
 corresponding submodule function. New code should use the submodule API.
@@ -131,10 +131,10 @@ Download the wheel (or sdist) for your platform from the
 
 ```sh
 # From a wheel (recommended — no Rust toolchain needed).
-pip install ./fitdistcp-0.0.4-cp312-cp312-manylinux_2_17_x86_64.whl
+pip install ./rusty_fitdistcp-0.0.4-cp312-cp312-manylinux_2_17_x86_64.whl
 
 # Or from the source distribution (requires a Rust toolchain + maturin).
-pip install ./fitdistcp-0.0.4.tar.gz
+pip install ./rusty_fitdistcp-0.0.4.tar.gz
 ```
 
 Prebuilt wheels are published for CPython **3.9–3.14** on manylinux, macOS
@@ -149,8 +149,8 @@ PyPI publishing step.
 Verify the drop-in install:
 
 ```python
-import fitdistcp
-fitdistcp.norm.ppf([1.0, 2.0, 3.0], p=[0.1, 0.5, 0.9])
+import rusty_fitdistcp
+rusty_fitdistcp.norm.ppf([1.0, 2.0, 3.0], p=[0.1, 0.5, 0.9])
 ```
 
 ### Dev-container install (from source)
@@ -165,9 +165,9 @@ docker compose run --rm dev bash -lc \
    && pip install --quiet numpy pytest && maturin develop --quiet && pytest"
 ```
 
-`maturin develop` compiles the PyO3 extension (`fitdistcp._fitdistcp`) and
+`maturin develop` compiles the PyO3 extension (`rusty_fitdistcp._fitdistcp`) and
 installs the thin Python submodules from
-[`python/fitdistcp/`](python/fitdistcp/__init__.py:1) into the active virtualenv.
+[`python/rusty_fitdistcp/`](python/rusty_fitdistcp/__init__.py:1) into the active virtualenv.
 To build a distributable wheel locally:
 
 ```sh

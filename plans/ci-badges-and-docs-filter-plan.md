@@ -18,7 +18,7 @@
 - Release workflow: [`.github/workflows/release.yml`](.github/workflows/release.yml:1)
   - `name: Release`
   - Triggers: `workflow_dispatch`, tag push `v*`.
-- README starts with `# fitdistcp — Rust Port` at
+- README starts with `# rusty-fitdistcp — Rust Port` at
   [`README.md`](README.md:1); no badges currently exist.
 - Repo owner/name must be confirmed before hard-coding badge URLs (see Open
   Questions). The reference upstream is `stephenjewson/fitdistcp`, but this is a

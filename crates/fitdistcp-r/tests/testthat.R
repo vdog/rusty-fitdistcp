@@ -1,7 +1,7 @@
-# Test harness for the fitdistcp R package (W12).
+# Test harness for the rusty.fitdistcp R package (W12).
 #
 # Runs the testthat suite under `R CMD check` / `devtools::test()`.
 library(testthat)
-library(fitdistcp)
+library(rusty.fitdistcp)
 
-test_check("fitdistcp")
+test_check("rusty.fitdistcp")

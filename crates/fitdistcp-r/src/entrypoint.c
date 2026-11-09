@@ -11,3 +11,12 @@ void R_init_fitdistcp_extendr(DllInfo *dll);
 void R_init_fitdistcp(DllInfo *dll) {
     R_init_fitdistcp_extendr(dll);
 }
+
+// The R package name is `rusty.fitdistcp`, so R's loader looks for the init
+// routine `R_init_rusty.fitdistcp` (derived from the package name). Forward it
+// to the extendr-generated registration routine, whose name is tied to the
+// internal Rust module (`fitdistcp`). The `R_init_fitdistcp` symbol above is
+// retained for the internal module name.
+void R_init_rusty_fitdistcp(DllInfo *dll) {
+    R_init_fitdistcp_extendr(dll);
+}

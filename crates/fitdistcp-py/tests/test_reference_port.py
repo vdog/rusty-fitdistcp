@@ -6,12 +6,12 @@ binding's test suite:
 * ``tools/fitdistcp-py-ref/fitdistcp/test.py`` — exercises ``ppf``/``rvs``/
   ``pdf``/``cdf`` for all models. The reference uses *flat* imports
   (``import norm as cp_norm``); here we use the NEW submodule API
-  (``import fitdistcp.norm as cp_norm``). ``genextreme_p12`` is OMITTED
+  (``import rusty_fitdistcp.norm as cp_norm``). ``genextreme_p12`` is OMITTED
   (deferred — see the Phase B scope decisions).
 * ``tools/fitdistcp-py-ref/fitdistcp/test_example_data.py`` — the fixed example
   data vectors (ported verbatim into :mod:`reference_data`).
 * ``tools/fitdistcp-py-ref/fitdistcp/test_reltest.py`` — the reliability test,
-  ported against ``fitdistcp.reltest``.
+  ported against ``rusty_fitdistcp.reltest``.
 
 The reference ``test.py`` is a *script* (it defines ``ppf()``/``rvs()``/``pdf()``/
 ``cdf()`` and never asserts); we port it into pytest tests that assert the
@@ -26,16 +26,16 @@ Run inside the dev container after ``maturin develop``::
 import numpy as np
 import pytest
 
-import fitdistcp
-import fitdistcp.expon
-import fitdistcp.gamma
-import fitdistcp.genextreme
-import fitdistcp.genextreme_p1
-import fitdistcp.genpareto
-import fitdistcp.gumbel
-import fitdistcp.lnorm
-import fitdistcp.norm
-import fitdistcp.weibull
+import rusty_fitdistcp
+import rusty_fitdistcp.expon
+import rusty_fitdistcp.gamma
+import rusty_fitdistcp.genextreme
+import rusty_fitdistcp.genextreme_p1
+import rusty_fitdistcp.genpareto
+import rusty_fitdistcp.gumbel
+import rusty_fitdistcp.lnorm
+import rusty_fitdistcp.norm
+import rusty_fitdistcp.weibull
 
 import reference_data as data
 
@@ -81,27 +81,27 @@ def _assert_keys(res, keys):
 def test_reference_ppf_all_models():
     """Port of the reference ``test.py::ppf()`` (genextreme_p12 omitted)."""
     q = [
-        fitdistcp.norm.ppf(
+        rusty_fitdistcp.norm.ppf(
             data.norm[1], logscores=True, unbiasedv=True, waicscores=True
         ),
-        fitdistcp.lnorm.ppf(
+        rusty_fitdistcp.lnorm.ppf(
             data.lnorm[1], logscores=True, means=True, waicscores=True
         ),
-        fitdistcp.gamma.ppf(data.gamma[1], means=True, waicscores=True),
-        fitdistcp.gumbel.ppf(
+        rusty_fitdistcp.gamma.ppf(data.gamma[1], means=True, waicscores=True),
+        rusty_fitdistcp.gumbel.ppf(
             data.gumbel[1], logscores=True, means=True, waicscores=True
         ),
-        fitdistcp.weibull.ppf(
+        rusty_fitdistcp.weibull.ppf(
             data.weibull[2], logscores=True, means=True, waicscores=True
         ),
-        fitdistcp.expon.ppf(
+        rusty_fitdistcp.expon.ppf(
             data.expon[1], logscores=True, means=True, waicscores=True
         ),
-        fitdistcp.genextreme.ppf(data.gev[0], means=True, waicscores=True),
-        fitdistcp.genextreme_p1.ppf(
+        rusty_fitdistcp.genextreme.ppf(data.gev[0], means=True, waicscores=True),
+        rusty_fitdistcp.genextreme_p1.ppf(
             data.gev_p1[0], data.gev_p1_t[0], t0=21, means=True, waicscores=True
         ),
-        fitdistcp.genpareto.ppf(data.gpd[0], means=True, waicscores=True),
+        rusty_fitdistcp.genpareto.ppf(data.gpd[0], means=True, waicscores=True),
     ]
     for res in q:
         _assert_keys(res, PPF_KEYS)
@@ -115,7 +115,7 @@ def test_reference_ppf_all_models():
 
 def test_reference_ppf_norm_uv_extras():
     """The reference ``norm.ppf`` adds ``uv_params``/``uv_quantiles``."""
-    res = fitdistcp.norm.ppf(data.norm[1], unbiasedv=True)
+    res = rusty_fitdistcp.norm.ppf(data.norm[1], unbiasedv=True)
     assert "uv_params" in res
     assert "uv_quantiles" in res
 
@@ -128,15 +128,15 @@ def test_reference_ppf_norm_uv_extras():
 def test_reference_rvs_all_models():
     """Port of the reference ``test.py::rvs()`` (genextreme_p12 omitted)."""
     y = [
-        fitdistcp.norm.rvs(1, data.norm[0]),
-        fitdistcp.lnorm.rvs(1, data.lnorm[0]),
-        fitdistcp.gamma.rvs(1, data.gamma[0]),
-        fitdistcp.gumbel.rvs(1, data.gumbel[0]),
-        fitdistcp.weibull.rvs(1, data.weibull[0]),
-        fitdistcp.expon.rvs(1, data.expon[0]),
-        fitdistcp.genextreme.rvs(1, data.gev[0]),
-        fitdistcp.genextreme_p1.rvs(1, data.gev_p1[0], data.gev_p1_t[0], t0=21),
-        fitdistcp.genpareto.rvs(1, data.gpd[0]),
+        rusty_fitdistcp.norm.rvs(1, data.norm[0]),
+        rusty_fitdistcp.lnorm.rvs(1, data.lnorm[0]),
+        rusty_fitdistcp.gamma.rvs(1, data.gamma[0]),
+        rusty_fitdistcp.gumbel.rvs(1, data.gumbel[0]),
+        rusty_fitdistcp.weibull.rvs(1, data.weibull[0]),
+        rusty_fitdistcp.expon.rvs(1, data.expon[0]),
+        rusty_fitdistcp.genextreme.rvs(1, data.gev[0]),
+        rusty_fitdistcp.genextreme_p1.rvs(1, data.gev_p1[0], data.gev_p1_t[0], t0=21),
+        rusty_fitdistcp.genpareto.rvs(1, data.gpd[0]),
     ]
     for res in y:
         _assert_keys(res, RVS_KEYS)
@@ -164,20 +164,20 @@ def test_reference_pdf_all_models():
     density is well-defined at the reference's evaluation point.
     """
     d = [
-        ("norm", fitdistcp.norm.pdf(data.norm[0], y=[0])),
-        ("lnorm", fitdistcp.lnorm.pdf(data.lnorm[0], y=[0])),
-        ("gamma", fitdistcp.gamma.pdf(data.gamma[0], y=[0])),
-        ("gumbel", fitdistcp.gumbel.pdf(data.gumbel[0], y=[1])),
-        ("weibull", fitdistcp.weibull.pdf(data.weibull[0], y=[1])),
-        ("expon", fitdistcp.expon.pdf(data.expon[0], y=[1])),
-        ("genextreme", fitdistcp.genextreme.pdf(data.gev[0], y=[1])),
+        ("norm", rusty_fitdistcp.norm.pdf(data.norm[0], y=[0])),
+        ("lnorm", rusty_fitdistcp.lnorm.pdf(data.lnorm[0], y=[0])),
+        ("gamma", rusty_fitdistcp.gamma.pdf(data.gamma[0], y=[0])),
+        ("gumbel", rusty_fitdistcp.gumbel.pdf(data.gumbel[0], y=[1])),
+        ("weibull", rusty_fitdistcp.weibull.pdf(data.weibull[0], y=[1])),
+        ("expon", rusty_fitdistcp.expon.pdf(data.expon[0], y=[1])),
+        ("genextreme", rusty_fitdistcp.genextreme.pdf(data.gev[0], y=[1])),
         (
             "genextreme_p1",
-            fitdistcp.genextreme_p1.pdf(
+            rusty_fitdistcp.genextreme_p1.pdf(
                 data.gev_p1[0], data.gev_p1_t[0], y=[1], t0=21
             ),
         ),
-        ("genpareto", fitdistcp.genpareto.pdf(data.gpd[0], y=[1])),
+        ("genpareto", rusty_fitdistcp.genpareto.pdf(data.gpd[0], y=[1])),
     ]
     # The positive-support models are evaluated at the support boundary (y=0) by
     # the reference script; their density is not finite there.
@@ -199,15 +199,15 @@ def test_reference_pdf_all_models():
 def test_reference_cdf_all_models():
     """Port of the reference ``test.py::cdf()`` (genextreme_p12 omitted)."""
     q = [
-        fitdistcp.norm.cdf(data.norm[0]),
-        fitdistcp.lnorm.cdf(data.lnorm[0]),
-        fitdistcp.gamma.cdf(data.gamma[0]),
-        fitdistcp.gumbel.cdf(data.gumbel[0]),
-        fitdistcp.weibull.cdf(data.weibull[0]),
-        fitdistcp.expon.cdf(data.expon[0]),
-        fitdistcp.genextreme.cdf(data.gev[0]),
-        fitdistcp.genextreme_p1.cdf(data.gev_p1[0], data.gev_p1_t[0], t0=21),
-        fitdistcp.genpareto.cdf(data.gpd[0]),
+        rusty_fitdistcp.norm.cdf(data.norm[0]),
+        rusty_fitdistcp.lnorm.cdf(data.lnorm[0]),
+        rusty_fitdistcp.gamma.cdf(data.gamma[0]),
+        rusty_fitdistcp.gumbel.cdf(data.gumbel[0]),
+        rusty_fitdistcp.weibull.cdf(data.weibull[0]),
+        rusty_fitdistcp.expon.cdf(data.expon[0]),
+        rusty_fitdistcp.genextreme.cdf(data.gev[0]),
+        rusty_fitdistcp.genextreme_p1.cdf(data.gev_p1[0], data.gev_p1_t[0], t0=21),
+        rusty_fitdistcp.genpareto.cdf(data.gpd[0]),
     ]
     for res in q:
         _assert_keys(res, CDF_KEYS)
@@ -218,7 +218,7 @@ def test_reference_cdf_all_models():
 
 
 # ---------------------------------------------------------------------------
-# Ported `test_reltest.py` — the reliability test against `fitdistcp.reltest`.
+# Ported `test_reltest.py` — the reliability test against `rusty_fitdistcp.reltest`.
 # ---------------------------------------------------------------------------
 
 # The reference `reltest_dep.py` covers these models.
@@ -248,16 +248,16 @@ RELTEST_SKIP = {"gamma": "pre-existing core gamma-MLE panic (special::inc_gamma)
 
 @pytest.mark.parametrize("model", RELTEST_MODELS)
 def test_reference_reltest(model):
-    """Port of the reference ``test_reltest.py`` against ``fitdistcp.reltest``.
+    """Port of the reference ``test_reltest.py`` against ``rusty_fitdistcp.reltest``.
 
     The reference script calls ``<model>.reltest(...)``; the Rust-backed drop-in
-    exposes a single ``fitdistcp.reltest.reltest(model, ...)`` entry point. We use
+    exposes a single ``rusty_fitdistcp.reltest.reltest(model, ...)`` entry point. We use
     a small ``ntrials``/``nx`` so the test is fast, and a short probability grid.
     """
     if model in RELTEST_SKIP:
         pytest.skip(RELTEST_SKIP[model])
     p = np.arange(0.05, 0.96, 0.05)
-    res = fitdistcp.reltest.reltest(model=model, ntrials=5, nx=20, p=p)
+    res = rusty_fitdistcp.reltest.reltest(model=model, ntrials=5, nx=20, p=p)
     assert set(res.keys()) == {"actual_p_ml", "actual_p_cp", "p"}
     # The reference returns Python lists.
     assert isinstance(res["actual_p_ml"], list)
@@ -272,4 +272,4 @@ def test_reference_reltest(model):
 
 def test_reference_reltest_unknown_model_raises():
     with pytest.raises(ValueError):
-        fitdistcp.reltest.reltest(model="not_a_model", ntrials=1, nx=5)
+        rusty_fitdistcp.reltest.reltest(model="not_a_model", ntrials=1, nx=5)

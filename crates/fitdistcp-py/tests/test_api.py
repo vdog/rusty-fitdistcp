@@ -1,4 +1,4 @@
-"""Python-level tests for the `fitdistcp` PyO3 bindings (W13).
+"""Python-level tests for the `rusty_fitdistcp` PyO3 bindings (W13).
 
 These tests exercise the §5.2 `pdf`/`cdf`/`ppf`/`rvs` API surface for the ten
 Phase-1 models. They check that each function returns the expected fields and
@@ -14,7 +14,7 @@ Run inside the dev container after `maturin develop`:
 import numpy as np
 import pytest
 
-import fitdistcp
+import rusty_fitdistcp
 
 
 # ---------------------------------------------------------------------------
@@ -26,7 +26,7 @@ def test_core_version():
     # B6: the Python package version is pinned to the reference (0.0.4), while
     # the core crate version is independent. Assert the core version is a
     # non-empty semver string rather than hard-coding a specific value.
-    v = fitdistcp.core_version()
+    v = rusty_fitdistcp.core_version()
     assert isinstance(v, str)
     assert v, "core_version() must be a non-empty string"
     parts = v.split(".")
@@ -37,12 +37,12 @@ def test_core_version():
 def test_add_vectors():
     a = np.array([1.0, 2.0, 3.0])
     b = np.array([4.0, 5.0, 6.0])
-    out = fitdistcp.add_vectors(a, b)
+    out = rusty_fitdistcp.add_vectors(a, b)
     np.testing.assert_allclose(out, [5.0, 7.0, 9.0])
 
 
 def test_sum_values():
-    assert fitdistcp.sum_values(np.array([1.0, 2.0, 3.0, 4.0])) == 10.0
+    assert rusty_fitdistcp.sum_values(np.array([1.0, 2.0, 3.0, 4.0])) == 10.0
 
 
 # ---------------------------------------------------------------------------
@@ -106,7 +106,7 @@ def _check_common(res):
 
 
 def test_norm_ppf_fields_and_values():
-    res = fitdistcp.ppf_norm(X, P)
+    res = rusty_fitdistcp.ppf_norm(X, P)
     _check_common(res)
     assert "ml_quantiles" in res and "cp_quantiles" in res
     assert res["ml_quantiles"].shape == (3,)
@@ -125,7 +125,7 @@ def test_norm_ppf_fields_and_values():
 
 
 def test_norm_pdf_fields_and_values():
-    res = fitdistcp.pdf_norm(X, Y)
+    res = rusty_fitdistcp.pdf_norm(X, Y)
     _check_common(res)
     assert "ml_pdf" in res and "cp_pdf" in res
     # The predictive density is evaluated at the prediction grid `y` (mirroring
@@ -138,7 +138,7 @@ def test_norm_pdf_fields_and_values():
 
 
 def test_norm_cdf_fields_and_values():
-    res = fitdistcp.cdf_norm(X, Y)
+    res = rusty_fitdistcp.cdf_norm(X, Y)
     _check_common(res)
     assert "ml_cdf" in res and "cp_cdf" in res
     # The CDFs are evaluated at the observed data `y` (mirroring the R
@@ -151,7 +151,7 @@ def test_norm_cdf_fields_and_values():
 
 
 def test_norm_rvs_fields_and_values():
-    res = fitdistcp.rvs_norm(5, Y)
+    res = rusty_fitdistcp.rvs_norm(5, Y)
     _check_common(res)
     assert "ml_deviates" in res and "cp_deviates" in res
     assert res["ml_deviates"].shape == (5,)
@@ -161,7 +161,7 @@ def test_norm_rvs_fields_and_values():
 
 def test_norm_means_optional_arg_accepted():
     # `means` is accepted and passed through (not yet consumed by the core).
-    res = fitdistcp.ppf_norm(X, P, means=np.array([0.0, 1.0]))
+    res = rusty_fitdistcp.ppf_norm(X, P, means=np.array([0.0, 1.0]))
     _check_common(res)
     assert res["ml_quantiles"].shape == (3,)
 
@@ -172,7 +172,7 @@ def test_norm_means_optional_arg_accepted():
 
 
 def test_exp_ppf_fields_and_values():
-    res = fitdistcp.ppf_exp(X, P)
+    res = rusty_fitdistcp.ppf_exp(X, P)
     _check_common(res)
     assert res["ml_params"].shape == (1,)
     assert res["ml_quantiles"].shape == (3,)
@@ -186,7 +186,7 @@ def test_exp_pdf_cdf_rvs():
     # strictly positive (the MLE rate = n / sum(x) is degenerate otherwise).
     # Use `Y_POS` as the data and a positive prediction grid.
     grid = np.array([0.5, 1.0, 1.5, 2.0])
-    pdf = fitdistcp.pdf_exp(Y_POS, grid)
+    pdf = rusty_fitdistcp.pdf_exp(Y_POS, grid)
     _check_common(pdf)
     # The density is evaluated at the grid `y` (length matches `y`).
     assert pdf["ml_pdf"].shape == grid.shape
@@ -194,11 +194,11 @@ def test_exp_pdf_cdf_rvs():
     assert np.all(pdf["ml_pdf"] > 0.0)
     assert np.all(pdf["cp_pdf"] > 0.0)
 
-    cdf = fitdistcp.cdf_exp(Y_POS, grid)
+    cdf = rusty_fitdistcp.cdf_exp(Y_POS, grid)
     _check_common(cdf)
     assert np.all((cdf["ml_cdf"] >= 0.0) & (cdf["ml_cdf"] <= 1.0))
 
-    rvs = fitdistcp.rvs_exp(4, Y_POS)
+    rvs = rusty_fitdistcp.rvs_exp(4, Y_POS)
     _check_common(rvs)
     assert rvs["cp_deviates"].shape == (4,)
 
@@ -209,7 +209,7 @@ def test_exp_pdf_cdf_rvs():
 
 
 def test_gev_ppf_fields_and_extras():
-    res = fitdistcp.ppf_gev(X, P)
+    res = rusty_fitdistcp.ppf_gev(X, P)
     _check_common(res)
     assert res["ml_params"].shape == (3,)
     assert "ml_max" in res
@@ -219,7 +219,7 @@ def test_gev_ppf_fields_and_extras():
 
 
 def test_gev_pdf_cdf_rvs():
-    pdf = fitdistcp.pdf_gev(X, Y_GEV)
+    pdf = rusty_fitdistcp.pdf_gev(X, Y_GEV)
     _check_common(pdf)
     assert "revert2ml" in pdf
     # The density is evaluated at the grid `y` (length matches `y`).
@@ -227,11 +227,11 @@ def test_gev_pdf_cdf_rvs():
     assert pdf["cp_pdf"].shape == Y_GEV.shape
     assert np.all(np.isfinite(pdf["cp_pdf"]))
 
-    cdf = fitdistcp.cdf_gev(X, Y_GEV)
+    cdf = rusty_fitdistcp.cdf_gev(X, Y_GEV)
     _check_common(cdf)
     assert np.all((cdf["ml_cdf"] >= 0.0) & (cdf["ml_cdf"] <= 1.0))
 
-    rvs = fitdistcp.rvs_gev(3, Y_GEV)
+    rvs = rusty_fitdistcp.rvs_gev(3, Y_GEV)
     _check_common(rvs)
     assert rvs["cp_deviates"].shape == (3,)
 
@@ -242,7 +242,7 @@ def test_gev_pdf_cdf_rvs():
 
 
 def test_gamma_ppf_fields_and_values():
-    res = fitdistcp.ppf_gamma(X, P)
+    res = rusty_fitdistcp.ppf_gamma(X, P)
     _check_common(res)
     assert res["ml_params"].shape == (2,)
     assert np.all(np.isfinite(res["cp_quantiles"]))
@@ -251,7 +251,7 @@ def test_gamma_ppf_fields_and_values():
 
 def test_gamma_pdf_cdf_rvs():
     # Use a strictly-positive grid: the gamma density is undefined at x <= 0.
-    pdf = fitdistcp.pdf_gamma(X_POS, Y_POS)
+    pdf = rusty_fitdistcp.pdf_gamma(X_POS, Y_POS)
     _check_common(pdf)
     # The density is evaluated at the grid `y` (length matches `y`).
     assert pdf["ml_pdf"].shape == Y_POS.shape
@@ -262,14 +262,14 @@ def test_gamma_pdf_cdf_rvs():
     assert np.all(np.isfinite(pdf["cp_pdf"]))
     assert np.all(pdf["cp_pdf"] >= 0.0)
 
-    cdf = fitdistcp.cdf_gamma(X_POS, Y_POS)
+    cdf = rusty_fitdistcp.cdf_gamma(X_POS, Y_POS)
     _check_common(cdf)
     # CDFs are evaluated at `y` (length 10) and are finite probabilities.
     assert cdf["cp_cdf"].shape == Y_POS.shape
     assert np.all(np.isfinite(cdf["cp_cdf"]))
     assert np.all((cdf["cp_cdf"] >= 0.0) & (cdf["cp_cdf"] <= 1.0))
 
-    rvs = fitdistcp.rvs_gamma(6, Y_POS)
+    rvs = rusty_fitdistcp.rvs_gamma(6, Y_POS)
     _check_common(rvs)
     assert rvs["cp_deviates"].shape == (6,)
 
@@ -290,7 +290,7 @@ T_NORM_P1 = np.arange(0.04, 1.0 + 1e-9, 0.04)
 
 def test_norm_p1_accepts_predictor_args():
     t = np.linspace(0.0, 1.0, Y.size)
-    res = fitdistcp.ppf_norm_p1(X, P, t=t, t0=0.0, n0=1.0)
+    res = rusty_fitdistcp.ppf_norm_p1(X, P, t=t, t0=0.0, n0=1.0)
     assert res["ml_params"].shape == (3,)
     assert np.all(np.isfinite(res["cp_quantiles"]))
 
@@ -298,7 +298,7 @@ def test_norm_p1_accepts_predictor_args():
 def test_norm_p1_predictor_semantics():
     # n0 = 10 (1-based) => t0 = t[10] = 0.4; mean(t) = 0.52.
     p9 = np.arange(0.1, 1.0, 0.1)
-    res = fitdistcp.ppf_norm_p1(X_NORM_P1, p9, t=T_NORM_P1, n0=10.0)
+    res = rusty_fitdistcp.ppf_norm_p1(X_NORM_P1, p9, t=T_NORM_P1, n0=10.0)
     assert res["ml_params"].shape == (3,)
     # Reference ml_params (decentered).
     np.testing.assert_allclose(
@@ -319,7 +319,7 @@ def test_norm_p1_predictor_semantics():
 
 def test_gev_p1_accepts_predictor_args():
     t = np.linspace(0.0, 1.0, Y_GEV.size)
-    res = fitdistcp.pdf_gev_p1(X, Y_GEV, t=t, t0=0.0, n0=1.0)
+    res = rusty_fitdistcp.pdf_gev_p1(X, Y_GEV, t=t, t0=0.0, n0=1.0)
     assert res["ml_params"].shape == (4,)
     # `ml_pdf` is evaluated at the prediction grid `y` (length matches `y`).
     assert res["ml_pdf"].shape == Y_GEV.shape
@@ -333,7 +333,7 @@ def test_gev_p1_accepts_predictor_args():
 def test_gev_p1_predictor_semantics():
     # The GEV `_p1` CP uses the DMGS CRHP/flat path with revert2ml.
     t = np.linspace(0.025, 1.0, Y_GEV.size)
-    res = fitdistcp.ppf_gev_p1(X, P, t=t, n0=10.0)
+    res = rusty_fitdistcp.ppf_gev_p1(X, P, t=t, n0=10.0)
     assert res["ml_params"].shape == (4,)
     assert "revert2ml" in res
     assert "ml_max" in res
@@ -356,10 +356,10 @@ def test_gev_p1_predictor_semantics():
     ],
 )
 def test_remaining_models_surface(suffix, y):
-    ppf = getattr(fitdistcp, f"ppf_{suffix}")
-    pdf = getattr(fitdistcp, f"pdf_{suffix}")
-    cdf = getattr(fitdistcp, f"cdf_{suffix}")
-    rvs = getattr(fitdistcp, f"rvs_{suffix}")
+    ppf = getattr(rusty_fitdistcp, f"ppf_{suffix}")
+    pdf = getattr(rusty_fitdistcp, f"pdf_{suffix}")
+    cdf = getattr(rusty_fitdistcp, f"cdf_{suffix}")
+    rvs = getattr(rusty_fitdistcp, f"rvs_{suffix}")
 
     # Use `y` as the training data (it is a valid sample for each model's
     # support) and as the prediction grid. `X` contains non-positive values and

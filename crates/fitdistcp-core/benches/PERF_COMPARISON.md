@@ -50,10 +50,10 @@ For each `(model, operation, n)` the harness:
 
 | Operation | Rust port | Reference R | Python module | Rust binding |
 |---|---|---|---|---|
-| `pdf` | `predict(...).cp_pdf` / `cp_pdf` | `dnorm_cp` / `dgev_cp` / `dgamma_cp` | `fitdistcp.<model>.pdf(x, y=...)['cp_pdf']` | `fitdistcp.<model>.pdf(x, y=...)['cp_pdf']` |
-| `cdf` | `predict(...).cp_cdf` / `cp_cdf` | `pnorm_cp` / `pgev_cp` / `pgamma_cp` | `fitdistcp.<model>.cdf(x, y=...)['cp_cdf']` | `fitdistcp.<model>.cdf(x, y=...)['cp_cdf']` |
-| `ppf` | `predict(...).cp_quantiles` / `cp_quantiles` | `qnorm_cp` / `qgev_cp` / `qgamma_cp` | `fitdistcp.<model>.ppf(x, p=...)['cp_quantiles']` | `fitdistcp.<model>.ppf(x, p=...)['cp_quantiles']` |
-| `rvs` | `predict(...).cp_rvs` / `cp_rvs` | `rnorm_cp` / `rgev_cp` / `rgamma_cp` | `fitdistcp.<model>.rvs(n, x)['cp_deviates']` | `fitdistcp.<model>.rvs(n, x)['cp_deviates']` |
+| `pdf` | `predict(...).cp_pdf` / `cp_pdf` | `dnorm_cp` / `dgev_cp` / `dgamma_cp` | `fitdistcp.<model>.pdf(x, y=...)['cp_pdf']` | `rusty_fitdistcp.<model>.pdf(x, y=...)['cp_pdf']` |
+| `cdf` | `predict(...).cp_cdf` / `cp_cdf` | `pnorm_cp` / `pgev_cp` / `pgamma_cp` | `fitdistcp.<model>.cdf(x, y=...)['cp_cdf']` | `rusty_fitdistcp.<model>.cdf(x, y=...)['cp_cdf']` |
+| `ppf` | `predict(...).cp_quantiles` / `cp_quantiles` | `qnorm_cp` / `qgev_cp` / `qgamma_cp` | `fitdistcp.<model>.ppf(x, p=...)['cp_quantiles']` | `rusty_fitdistcp.<model>.ppf(x, p=...)['cp_quantiles']` |
+| `rvs` | `predict(...).cp_rvs` / `cp_rvs` | `rnorm_cp` / `rgev_cp` / `rgamma_cp` | `fitdistcp.<model>.rvs(n, x)['cp_deviates']` | `rusty_fitdistcp.<model>.rvs(n, x)['cp_deviates']` |
 
 ### 1.2 End-to-end `predict` (MLE + DMGS)
 
@@ -64,9 +64,9 @@ Rust BFGS + Newton path.
 
 | Model | Rust port | Reference R | Python module | Rust binding |
 |---|---|---|---|---|
-| `norm` | `predict(Normal, req, init)` | `qnorm_cp` (full pipeline) | `fitdistcp.norm.ppf(...)` | `fitdistcp.norm.ppf(...)` |
-| `genextreme` | `predict(GenExtreme, req, init)` | `qgev_cp` (full pipeline) | `fitdistcp.genextreme.ppf(...)` | `fitdistcp.genextreme.ppf(...)` |
-| `gamma` | `predict(Gamma, req, init)` | `qgamma_cp` (full pipeline) | `fitdistcp.gamma.ppf(...)` | `fitdistcp.gamma.ppf(...)` |
+| `norm` | `predict(Normal, req, init)` | `qnorm_cp` (full pipeline) | `fitdistcp.norm.ppf(...)` | `rusty_fitdistcp.norm.ppf(...)` |
+| `genextreme` | `predict(GenExtreme, req, init)` | `qgev_cp` (full pipeline) | `fitdistcp.genextreme.ppf(...)` | `rusty_fitdistcp.genextreme.ppf(...)` |
+| `gamma` | `predict(Gamma, req, init)` | `qgamma_cp` (full pipeline) | `fitdistcp.gamma.ppf(...)` | `rusty_fitdistcp.gamma.ppf(...)` |
 
 ### 1.3 reltest (reliability simulation)
 
@@ -201,12 +201,12 @@ matching [`mle_fitting.rs`](mle_fitting.rs).
 
 | Operation | Rust port | Reference R | Python module | Rust binding |
 |---|---|---|---|---|
-| pdf | `predict(...)` / `cp_pdf` | `dnorm_cp` / `dgev_cp` / `dgamma_cp` | `fitdistcp.<model>.pdf(x, y=...)['cp_pdf']` | `fitdistcp.<model>.pdf(x, y=...)['cp_pdf']` |
-| cdf | `predict(...)` / `cp_cdf` | `pnorm_cp` / `pgev_cp` / `pgamma_cp` | `fitdistcp.<model>.cdf(x, y=...)['cp_cdf']` | `fitdistcp.<model>.cdf(x, y=...)['cp_cdf']` |
-| ppf | `predict(...)` / `cp_quantiles` | `qnorm_cp` / `qgev_cp` / `qgamma_cp` | `fitdistcp.<model>.ppf(x, p=...)['cp_quantiles']` | `fitdistcp.<model>.ppf(x, p=...)['cp_quantiles']` |
-| rvs | `predict(...)` / `cp_rvs` | `rnorm_cp` / `rgev_cp` / `rgamma_cp` | `fitdistcp.<model>.rvs(n, x)['cp_deviates']` | `fitdistcp.<model>.rvs(n, x)['cp_deviates']` |
-| end-to-end | `predict(model, req, init)` | `q*_cp` (full pipeline) | `fitdistcp.<model>.ppf(...)` | `fitdistcp.<model>.ppf(...)` |
-| reltest | `fitdistcp_core` reltest port | `reltest` / `reltest2` | `fitdistcp.reltest.reltest_<model>` | `fitdistcp.reltest.reltest(model, ntrials, nx, p, true_params, init)` |
+| pdf | `predict(...)` / `cp_pdf` | `dnorm_cp` / `dgev_cp` / `dgamma_cp` | `fitdistcp.<model>.pdf(x, y=...)['cp_pdf']` | `rusty_fitdistcp.<model>.pdf(x, y=...)['cp_pdf']` |
+| cdf | `predict(...)` / `cp_cdf` | `pnorm_cp` / `pgev_cp` / `pgamma_cp` | `fitdistcp.<model>.cdf(x, y=...)['cp_cdf']` | `rusty_fitdistcp.<model>.cdf(x, y=...)['cp_cdf']` |
+| ppf | `predict(...)` / `cp_quantiles` | `qnorm_cp` / `qgev_cp` / `qgamma_cp` | `fitdistcp.<model>.ppf(x, p=...)['cp_quantiles']` | `rusty_fitdistcp.<model>.ppf(x, p=...)['cp_quantiles']` |
+| rvs | `predict(...)` / `cp_rvs` | `rnorm_cp` / `rgev_cp` / `rgamma_cp` | `fitdistcp.<model>.rvs(n, x)['cp_deviates']` | `rusty_fitdistcp.<model>.rvs(n, x)['cp_deviates']` |
+| end-to-end | `predict(model, req, init)` | `q*_cp` (full pipeline) | `fitdistcp.<model>.ppf(...)` | `rusty_fitdistcp.<model>.ppf(...)` |
+| reltest | `fitdistcp_core` reltest port | `reltest` / `reltest2` | `fitdistcp.reltest.reltest_<model>` | `rusty_fitdistcp.reltest.reltest(model, ntrials, nx, p, true_params, init)` |
 
 Confirmed reference entry points:
 
@@ -231,7 +231,7 @@ These are recorded in the results header so the numbers are not misread:
    constant-factor gap that is a language/runtime effect, not an algorithmic one.
 3. **Rust binding boundary.** The Rust binding (`rust_binding`) is compiled Rust
    behind a Python boundary: it is the drop-in replacement for the reference
-   Python package, exposing the same submodule API (`fitdistcp.<model>.pdf(...)`
+   Python package, exposing the same submodule API (`rusty_fitdistcp.<model>.pdf(...)`
    etc.). Its numbers should therefore sit **between** the pure-Rust core
    (`rust`) and the pure-Python reference (`py_module`): the Python↔Rust call and
    argument/result marshalling overhead is the gap to `rust`, while the compiled

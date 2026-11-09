@@ -1,4 +1,4 @@
-# fitdistcp — Rust Port
+# rusty-fitdistcp — Rust Port
 
 [![CI](https://github.com/vdog/rusty-fitdistcp/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/vdog/rusty-fitdistcp/actions/workflows/ci.yml)
 [![Release](https://github.com/vdog/rusty-fitdistcp/actions/workflows/release.yml/badge.svg?branch=main)](https://github.com/vdog/rusty-fitdistcp/actions/workflows/release.yml)
@@ -64,8 +64,8 @@ fitdistcp/
 │   │   ├── NAMESPACE, DESCRIPTION   # R package metadata
 │   │   └── configure, configure.win # vendored-crate build hooks
 │   └── fitdistcp-py/                # PyO3 binding (maturin)
-│       ├── src/lib.rs               # private extension module (fitdistcp._fitdistcp)
-│       ├── python/fitdistcp/        # public submodule API (norm, genextreme, ...)
+│       ├── src/lib.rs               # private extension module (rusty_fitdistcp._fitdistcp)
+│       ├── python/rusty_fitdistcp/  # public submodule API (norm, genextreme, ...)
 │       ├── tests/                   # pytest suite (drop-in compat, golden, examples)
 │       └── pyproject.toml           # maturin + cibuildwheel config
 ├── tests/golden/                    # committed golden fixtures + tolerance policy
@@ -119,16 +119,16 @@ man pages are generated, and `DESCRIPTION` is finalized for CRAN.
 The Python binding is a **drop-in replacement** for the reference `fitdistcp`
 v0.0.4 Python package (vendored read-only at
 [`tools/fitdistcp-py-ref/`](tools/fitdistcp-py-ref/fitdistcp/__init__.py:1)). The
-compiled extension module is private (`fitdistcp._fitdistcp`); the public surface
+compiled extension module is private (`rusty_fitdistcp._fitdistcp`); the public surface
 is the **submodule API**, mirroring the reference:
 
 ```python
-import fitdistcp
+import rusty_fitdistcp
 
-fitdistcp.norm.ppf([1.0, 2.0, 3.0], p=[0.1, 0.5, 0.9])
-fitdistcp.genextreme.ppf(x, p=0.5)
-fitdistcp.genpareto.pdf(x, y)
-fitdistcp.reltest(x)
+rusty_fitdistcp.norm.ppf([1.0, 2.0, 3.0], p=[0.1, 0.5, 0.9])
+rusty_fitdistcp.genextreme.ppf(x, p=0.5)
+rusty_fitdistcp.genpareto.pdf(x, y)
+rusty_fitdistcp.reltest(x)
 ```
 
 Each submodule (`norm`, `genextreme`, `genpareto`, `expon`, `gamma`, `gumbel`,
@@ -136,7 +136,7 @@ Each submodule (`norm`, `genextreme`, `genpareto`, `expon`, `gamma`, `gumbel`,
 `rvs` (and `reltest` where applicable) with the reference signatures, defaults,
 and return-dict keys.
 
-The previous **flat API** (`fitdistcp.ppf_norm`, `fitdistcp.pdf_gev`, ...) is
+The previous **flat API** (`rusty_fitdistcp.ppf_norm`, `rusty_fitdistcp.pdf_gev`, ...) is
 retained as **deprecated aliases**: accessing a flat name emits a
 `DeprecationWarning` (module-level `__getattr__`) and forwards to the
 corresponding submodule function.
@@ -207,7 +207,7 @@ version:
 
 ```sh
 # End user: install a wheel (or sdist) from a GitHub release.
-pip install ./fitdistcp-0.0.4-cp312-cp312-manylinux_2_17_x86_64.whl
+pip install ./rusty_fitdistcp-0.0.4-cp312-cp312-manylinux_2_17_x86_64.whl
 
 # Dev container: build the extension from source and run the suite.
 docker compose run --rm dev bash -lc \
@@ -216,8 +216,8 @@ docker compose run --rm dev bash -lc \
 ```
 
 ```python
-import fitdistcp
-fitdistcp.norm.ppf([1.0, 2.0, 3.0], p=[0.1, 0.5, 0.9])
+import rusty_fitdistcp
+rusty_fitdistcp.norm.ppf([1.0, 2.0, 3.0], p=[0.1, 0.5, 0.9])
 ```
 
 ### R (drop-in for the reference R `fitdistcp` API)
@@ -225,7 +225,7 @@ fitdistcp.norm.ppf([1.0, 2.0, 3.0], p=[0.1, 0.5, 0.9])
 ```sh
 # End user: install the source tarball from a GitHub release.
 # Requires R >= 4.0 and a Rust toolchain (cargo + rustc >= 1.85) on PATH.
-R CMD INSTALL fitdistcp_0.1.0.tar.gz
+R CMD INSTALL rusty.fitdistcp_0.1.0.tar.gz
 
 # Dev container: load the package and run the testthat suite.
 docker compose run --rm dev bash -lc \
@@ -233,7 +233,7 @@ docker compose run --rm dev bash -lc \
 ```
 
 ```r
-library(fitdistcp)
+library(rusty.fitdistcp)
 qnorm_cp(c(0.1, 0.5, 0.9), x = c(-1, 0, 1))
 ```
 

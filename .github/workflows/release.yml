@@ -74,15 +74,15 @@ jobs:
         run: |
           docker run --rm -v "$PWD":/workspace -w /workspace "$IMAGE_TAG" \
             bash -lc "mkdir -p /workspace/.rcheck && \
-                      cp /workspace/crates/fitdistcp-r/fitdistcp_*.tar.gz /workspace/.rcheck/ && \
+                      cp /workspace/crates/fitdistcp-r/rusty.fitdistcp_*.tar.gz /workspace/.rcheck/ && \
                       cd /workspace/.rcheck && \
-                      R CMD check --no-manual fitdistcp_*.tar.gz"
+                      R CMD check --no-manual rusty.fitdistcp_*.tar.gz"
 
       - name: Upload R tarball
         uses: actions/upload-artifact@v4
         with:
           name: r-source-tarball
-          path: crates/fitdistcp-r/fitdistcp_*.tar.gz
+          path: crates/fitdistcp-r/rusty.fitdistcp_*.tar.gz
           if-no-files-found: error
 
       - name: Upload R check log
@@ -90,7 +90,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: r-check-log
-          path: .rcheck/fitdistcp.Rcheck/00check.log
+          path: .rcheck/rusty.fitdistcp.Rcheck/00check.log
           if-no-files-found: ignore
 
   # ---------------------------------------------------------------------------

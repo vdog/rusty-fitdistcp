@@ -1,5 +1,5 @@
 #!/bin/sh
-# W21 packaging — Windows configure script for the fitdistcp R package.
+# W21 packaging — Windows configure script for the rusty.fitdistcp R package.
 #
 # Mirrors `configure` (POSIX) for the Windows toolchain. R on Windows runs this
 # under the MSYS2/Rtools shell, so the same POSIX logic applies. The vendored

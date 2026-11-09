@@ -12,7 +12,7 @@ Two implementations are supported (selected with ``--impl`` or the
   ``lynnejewson/fitdistcp`` (cloned to ``tools/fitdistcp-py-ref/``). Emits
   ``implementation = "py_module"``.
 * ``rust`` — the Rust-backed drop-in binding (``crates/fitdistcp-py``), which
-  exposes the same reference submodule API (``fitdistcp.norm.ppf`` etc.).
+  exposes the same reference submodule API (``rusty_fitdistcp.norm.ppf`` etc.).
   Emits ``implementation = "rust_binding"``.
 
 Both modes emit CSV rows with the schema::
@@ -28,16 +28,16 @@ Workload (PERF_COMPARISON.md §1):
 
 Python API mapping (PERF_COMPARISON.md §4)::
 
-    pdf  -> fitdistcp.<model>.pdf(x, y=...)['cp_pdf']
-    cdf  -> fitdistcp.<model>.cdf(x, y=...)['cp_cdf']
-    ppf  -> fitdistcp.<model>.ppf(x, p=...)['cp_quantiles']
-    rvs  -> fitdistcp.<model>.rvs(n, x)['cp_deviates']
-    predict -> fitdistcp.<model>.ppf(...)   (full pipeline)
-    reltest -> fitdistcp.reltest.reltest_<model>
+    pdf  -> rusty_fitdistcp.<model>.pdf(x, y=...)['cp_pdf']
+    cdf  -> rusty_fitdistcp.<model>.cdf(x, y=...)['cp_cdf']
+    ppf  -> rusty_fitdistcp.<model>.ppf(x, p=...)['cp_quantiles']
+    rvs  -> rusty_fitdistcp.<model>.rvs(n, x)['cp_deviates']
+    predict -> rusty_fitdistcp.<model>.ppf(...)   (full pipeline)
+    reltest -> rusty_fitdistcp.reltest.reltest_<model>
 
 The reference mode imports the vendored package's *flat* modules (``import
 norm``); the Rust mode imports the drop-in submodule API (``import
-fitdistcp.norm``). Both are mapped onto the same workload by the dispatch
+rusty_fitdistcp.norm``). Both are mapped onto the same workload by the dispatch
 helpers below.
 
 Gamma parameterization (PERF_COMPARISON.md §5.4): the reference gamma uses
@@ -105,7 +105,7 @@ IMPL_RUST = "rust"
 IMPL_LABELS = {IMPL_REF: "py_module", IMPL_RUST: "rust_binding"}
 
 #: The Rust-backed drop-in binding's importable package name.
-RUST_PKG = "fitdistcp"
+RUST_PKG = "rusty_fitdistcp"
 
 MODELS = ("norm", "genextreme", "gamma")
 SIZES = (50, 500, 5000)
@@ -168,15 +168,16 @@ def import_ref_modules():
 def import_rust_modules():
     """Import the Rust-backed drop-in binding's submodules.
 
-    The drop-in exposes the reference submodule API (``fitdistcp.norm`` etc.),
-    so we import the top-level ``fitdistcp`` package and return its submodules.
+    The drop-in exposes the reference submodule API (``rusty_fitdistcp.norm``
+    etc.), so we import the top-level ``rusty_fitdistcp`` package and return its
+    submodules.
     The package must be installed (``maturin develop``) in the active
     environment.
 
     Returns a dict mapping the canonical model name to its submodule.
     """
     try:
-        import fitdistcp  # noqa: F401
+        import rusty_fitdistcp  # noqa: F401
     except ImportError as exc:
         fail(
             "could not import the Rust-backed '{}' package: {}\n"
@@ -318,7 +319,7 @@ def reltest_op(modules: Dict[str, object], model: str, impl: str) -> Callable:
       so we return a closure that maps the fixture's native-order ``params``
       onto the right keyword arguments.
     * ``rust`` — the Rust-backed drop-in exposes a single
-      ``fitdistcp.reltest.reltest(model, ntrials, nx, p, true_params, init)``
+      ``rusty_fitdistcp.reltest.reltest(model, ntrials, nx, p, true_params, init)``
       entry point; we pass the fixture's native-order ``params`` as both
       ``true_params`` and ``init``.
     """
@@ -333,7 +334,7 @@ def reltest_op(modules: Dict[str, object], model: str, impl: str) -> Callable:
     p_grid = np.arange(0.005, 0.995, 0.005)
 
     if impl == IMPL_RUST:
-        # The drop-in's reltest lives in the `fitdistcp.reltest` submodule.
+        # The drop-in's reltest lives in the `rusty_fitdistcp.reltest` submodule.
         try:
             reltest_mod = __import__(
                 "{}.reltest".format(RUST_PKG), fromlist=["reltest"]
