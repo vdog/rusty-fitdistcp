@@ -80,13 +80,13 @@ use pyo3::types::PyDict;
 use pyo3::Py;
 
 use fitdistcp_core::api::{
-    predict, predict_gev, predict_gev_p1, predict_norm_p1, FitResult, NormP1Result,
-    PredictionRequest,
+    predict, predict_analytic, predict_gamma, predict_gev, predict_gev_p1, predict_gev_p12,
+    predict_gpd, predict_norm_p1, AnalyticModel, FitResult, NormP1Result, PredictionRequest,
 };
 use fitdistcp_core::dmgs::DmgsModel;
 use fitdistcp_core::models::{
-    Exponential, Gamma, GenExtreme, GenExtremeP1, GenPareto, Gumbel, LogNormal, Normal, NormalP1,
-    Weibull,
+    Exponential, Gamma, GenExtreme, GenExtremeP1, GenExtremeP12, GenPareto, Gumbel, LogNormal,
+    Normal, NormalP1, Weibull,
 };
 
 // ---------------------------------------------------------------------------
@@ -184,6 +184,25 @@ fn decenter_fit(r: &FitResult, mean_t: f64) -> FitResult {
     }
     if out.cp_params.len() >= 2 {
         out.cp_params[0] -= out.cp_params[1] * mean_t;
+    }
+    out
+}
+
+/// Decenter a `genextreme_p12` [`FitResult`]'s location intercept and log-scale
+/// intercept.
+///
+/// The reference fits on the centered predictors and then decenters the reported
+/// intercepts: `a_ret = a_c - b*mean(t1)` and `sc1_ret = sc1_c - sc2*mean(t2)`.
+/// The slopes/scale/shape are unchanged.
+fn decenter_fit_p12(r: &FitResult, mean_t1: f64, mean_t2: f64) -> FitResult {
+    let mut out = r.clone();
+    if out.ml_params.len() >= 5 {
+        out.ml_params[0] -= out.ml_params[1] * mean_t1;
+        out.ml_params[2] -= out.ml_params[3] * mean_t2;
+    }
+    if out.cp_params.len() >= 5 {
+        out.cp_params[0] -= out.cp_params[1] * mean_t1;
+        out.cp_params[2] -= out.cp_params[3] * mean_t2;
     }
     out
 }
@@ -622,7 +641,7 @@ fn ppf_norm_ref<'py>(
     let x = x.as_slice()?.to_vec();
     let p = p.as_slice()?.to_vec();
     let req = make_request(x.clone(), x.clone(), p, None, None, None, None);
-    let r = predict(Normal, &req, &[0.0, 1.0]);
+    let r = predict_analytic(AnalyticModel::Norm, &req, &[0.0, 1.0], false);
     let d = ref_ppf_dict(py, &r, Normal, &x, ANALYTIC_CPMETHOD)?;
     // norm-specific extras.
     d.set_item("uv_params", UNBIASEDV_NOT_SELECTED)?;
@@ -648,7 +667,7 @@ fn pdf_norm_ref<'py>(
         None => x.clone(),
     };
     let req = make_request(x, y, vec![0.5], None, None, None, None);
-    let r = predict(Normal, &req, &[0.0, 1.0]);
+    let r = predict_analytic(AnalyticModel::Norm, &req, &[0.0, 1.0], false);
     ref_pdf_dict(py, &r, ANALYTIC_CPMETHOD)
 }
 
@@ -669,7 +688,7 @@ fn cdf_norm_ref<'py>(
         None => x.clone(),
     };
     let req = make_request(x, y.clone(), vec![0.5], None, None, None, None);
-    let r = predict(Normal, &req, &[0.0, 1.0]);
+    let r = predict_analytic(AnalyticModel::Norm, &req, &[0.0, 1.0], false);
     let ml_cdf = cdf_at(&Normal, &r.ml_params, &y);
     let cp_cdf = cdf_at(&Normal, &r.cp_params, &y);
     ref_cdf_dict(py, &r, ml_cdf, cp_cdf, ANALYTIC_CPMETHOD)
@@ -698,7 +717,7 @@ fn rvs_norm_ref<'py>(
     }
     let p = rvs_uniform_probs(py, n)?;
     let req = make_request(x.clone(), x, p, None, None, None, None);
-    let r = predict(Normal, &req, &[0.0, 1.0]);
+    let r = predict_analytic(AnalyticModel::Norm, &req, &[0.0, 1.0], false);
     ref_rvs_dict(py, &r, ANALYTIC_CPMETHOD)
 }
 
@@ -720,7 +739,7 @@ fn ppf_expon_ref<'py>(
     let x = x.as_slice()?.to_vec();
     let p = p.as_slice()?.to_vec();
     let req = make_request(x.clone(), x.clone(), p, None, None, None, None);
-    let r = predict(Exponential, &req, &[1.0]);
+    let r = predict_analytic(AnalyticModel::Expon, &req, &[1.0], false);
     ref_ppf_dict(py, &r, Exponential, &x, ANALYTIC_CPMETHOD)
 }
 
@@ -741,7 +760,7 @@ fn pdf_expon_ref<'py>(
         None => x.clone(),
     };
     let req = make_request(x, y, vec![0.5], None, None, None, None);
-    let r = predict(Exponential, &req, &[1.0]);
+    let r = predict_analytic(AnalyticModel::Expon, &req, &[1.0], false);
     ref_pdf_dict(py, &r, ANALYTIC_CPMETHOD)
 }
 
@@ -762,7 +781,7 @@ fn cdf_expon_ref<'py>(
         None => x.clone(),
     };
     let req = make_request(x, y.clone(), vec![0.5], None, None, None, None);
-    let r = predict(Exponential, &req, &[1.0]);
+    let r = predict_analytic(AnalyticModel::Expon, &req, &[1.0], false);
     let ml_cdf = cdf_at(&Exponential, &r.ml_params, &y);
     let cp_cdf = cdf_at(&Exponential, &r.cp_params, &y);
     ref_cdf_dict(py, &r, ml_cdf, cp_cdf, ANALYTIC_CPMETHOD)
@@ -791,7 +810,7 @@ fn rvs_expon_ref<'py>(
     }
     let p = rvs_uniform_probs(py, n)?;
     let req = make_request(x.clone(), x, p, None, None, None, None);
-    let r = predict(Exponential, &req, &[1.0]);
+    let r = predict_analytic(AnalyticModel::Expon, &req, &[1.0], false);
     ref_rvs_dict(py, &r, ANALYTIC_CPMETHOD)
 }
 
@@ -814,7 +833,7 @@ fn ppf_lnorm_ref<'py>(
     let x = x.as_slice()?.to_vec();
     let p = p.as_slice()?.to_vec();
     let req = make_request(x.clone(), x.clone(), p, None, None, None, None);
-    let r = predict(LogNormal, &req, &[0.0, 1.0]);
+    let r = predict_analytic(AnalyticModel::Lnorm, &req, &[0.0, 1.0], false);
     ref_ppf_dict(py, &r, LogNormal, &x, ANALYTIC_CPMETHOD)
 }
 
@@ -835,7 +854,7 @@ fn pdf_lnorm_ref<'py>(
         None => x.clone(),
     };
     let req = make_request(x, y, vec![0.5], None, None, None, None);
-    let r = predict(LogNormal, &req, &[0.0, 1.0]);
+    let r = predict_analytic(AnalyticModel::Lnorm, &req, &[0.0, 1.0], false);
     ref_pdf_dict(py, &r, ANALYTIC_CPMETHOD)
 }
 
@@ -856,7 +875,7 @@ fn cdf_lnorm_ref<'py>(
         None => x.clone(),
     };
     let req = make_request(x, y.clone(), vec![0.5], None, None, None, None);
-    let r = predict(LogNormal, &req, &[0.0, 1.0]);
+    let r = predict_analytic(AnalyticModel::Lnorm, &req, &[0.0, 1.0], false);
     let ml_cdf = cdf_at(&LogNormal, &r.ml_params, &y);
     let cp_cdf = cdf_at(&LogNormal, &r.cp_params, &y);
     ref_cdf_dict(py, &r, ml_cdf, cp_cdf, ANALYTIC_CPMETHOD)
@@ -885,7 +904,7 @@ fn rvs_lnorm_ref<'py>(
     }
     let p = rvs_uniform_probs(py, n)?;
     let req = make_request(x.clone(), x, p, None, None, None, None);
-    let r = predict(LogNormal, &req, &[0.0, 1.0]);
+    let r = predict_analytic(AnalyticModel::Lnorm, &req, &[0.0, 1.0], false);
     ref_rvs_dict(py, &r, ANALYTIC_CPMETHOD)
 }
 
@@ -1115,7 +1134,7 @@ fn ppf_gamma_ref<'py>(
     let x = x.as_slice()?.to_vec();
     let p = p.as_slice()?.to_vec();
     let req = make_request(x.clone(), x.clone(), p, None, None, None, None);
-    let r = predict(Gamma, &req, &[1.0, 1.0]);
+    let r = predict_gamma(&req, &[1.0, 1.0]);
     ref_ppf_dict(py, &r, Gamma, &x, ADHOC_DMGS_CPMETHOD)
 }
 
@@ -1136,7 +1155,7 @@ fn pdf_gamma_ref<'py>(
         None => x.clone(),
     };
     let req = make_request(x, y, vec![0.5], None, None, None, None);
-    let r = predict(Gamma, &req, &[1.0, 1.0]);
+    let r = predict_gamma(&req, &[1.0, 1.0]);
     ref_pdf_dict(py, &r, ADHOC_DMGS_CPMETHOD)
 }
 
@@ -1157,7 +1176,7 @@ fn cdf_gamma_ref<'py>(
         None => x.clone(),
     };
     let req = make_request(x, y.clone(), vec![0.5], None, None, None, None);
-    let r = predict(Gamma, &req, &[1.0, 1.0]);
+    let r = predict_gamma(&req, &[1.0, 1.0]);
     let ml_cdf = cdf_at(&Gamma, &r.ml_params, &y);
     let cp_cdf = cdf_at(&Gamma, &r.cp_params, &y);
     ref_cdf_dict(py, &r, ml_cdf, cp_cdf, ADHOC_DMGS_CPMETHOD)
@@ -1186,7 +1205,7 @@ fn rvs_gamma_ref<'py>(
     }
     let p = rvs_uniform_probs(py, n)?;
     let req = make_request(x.clone(), x, p, None, None, None, None);
-    let r = predict(Gamma, &req, &[1.0, 1.0]);
+    let r = predict_gamma(&req, &[1.0, 1.0]);
     ref_rvs_dict(py, &r, ADHOC_DMGS_CPMETHOD)
 }
 
@@ -1362,7 +1381,10 @@ fn ppf_genpareto_ref<'py>(
     let x = x.as_slice()?.to_vec();
     let p = p.as_slice()?.to_vec();
     let req = make_request(x.clone(), x.clone(), p, None, None, None, None);
-    let r = predict(GenPareto, &req, &[1.0, 0.0]);
+    // Phase 2 (Issue 2): seed the GPD scale from `setics` (the data's own sd)
+    // instead of the hard-coded 1.0, so dollar-scale data fits without NaN.
+    let init = GenPareto.setics(&req.y, &[0.0, 0.0]);
+    let r = predict_gpd(GenPareto, &req, &init);
     let shape = r.ml_params.get(1).copied().unwrap_or(0.0);
     let d = ref_ppf_dict(py, &r, GenPareto, &x, CRHPFLAT_DMGS_CPMETHOD)?;
     // genpareto-specific extras.
@@ -1403,7 +1425,8 @@ fn pdf_genpareto_ref<'py>(
         None => x.clone(),
     };
     let req = make_request(x, y, vec![0.5], None, None, None, None);
-    let r = predict(GenPareto, &req, &[1.0, 0.0]);
+    let init = GenPareto.setics(&req.y, &[0.0, 0.0]);
+    let r = predict_gpd(GenPareto, &req, &init);
     let shape = r.ml_params.get(1).copied().unwrap_or(0.0);
     let d = ref_pdf_dict(py, &r, CRHPFLAT_DMGS_CPMETHOD)?;
     d.set_item("revert2ml", shape <= -1.0)?;
@@ -1432,7 +1455,8 @@ fn cdf_genpareto_ref<'py>(
         None => x.clone(),
     };
     let req = make_request(x, y.clone(), vec![0.5], None, None, None, None);
-    let r = predict(GenPareto, &req, &[1.0, 0.0]);
+    let init = GenPareto.setics(&req.y, &[0.0, 0.0]);
+    let r = predict_gpd(GenPareto, &req, &init);
     let shape = r.ml_params.get(1).copied().unwrap_or(0.0);
     let ml_cdf = cdf_at(&GenPareto, &r.ml_params, &y);
     let cp_cdf = cdf_at(&GenPareto, &r.cp_params, &y);
@@ -1470,7 +1494,8 @@ fn rvs_genpareto_ref<'py>(
     }
     let p = rvs_uniform_probs(py, n)?;
     let req = make_request(x.clone(), x, p, None, None, None, None);
-    let r = predict(GenPareto, &req, &[1.0, 0.0]);
+    let init = GenPareto.setics(&req.y, &[0.0, 0.0]);
+    let r = predict_gpd(GenPareto, &req, &init);
     ref_rvs_dict(py, &r, CRHPFLAT_DMGS_CPMETHOD)
 }
 
@@ -1713,6 +1738,272 @@ fn rvs_genextreme_p1_ref<'py>(
 }
 
 // ---------------------------------------------------------------------------
+// B2.5b: reference-named functions — `genextreme_p12` (two predictors).
+// ---------------------------------------------------------------------------
+
+/// Reference `genextreme_p12.ppf`.
+#[pyfunction]
+#[pyo3(signature = (x, t1, t2, t01=None, t02=None, n01=None, n02=None, p=None, ics=None, fdalpha=0.01, minxi=-1.0, maxxi=1.0, means=false, waicscores=false, extramodels=false, pdf=false, dmgs=true, ru=false, ru_nsamples=100000, predictordata=true, centering=true))]
+#[allow(clippy::too_many_arguments)]
+fn ppf_genextreme_p12_ref<'py>(
+    py: Python<'py>,
+    x: PyReadonlyArray1<'py, f64>,
+    t1: PyReadonlyArray1<'py, f64>,
+    t2: PyReadonlyArray1<'py, f64>,
+    t01: Option<f64>,
+    t02: Option<f64>,
+    n01: Option<f64>,
+    n02: Option<f64>,
+    p: Option<PyReadonlyArray1<'py, f64>>,
+    ics: Option<PyReadonlyArray1<'py, f64>>,
+    fdalpha: f64,
+    minxi: f64,
+    maxxi: f64,
+    means: bool,
+    waicscores: bool,
+    extramodels: bool,
+    pdf: bool,
+    dmgs: bool,
+    ru: bool,
+    ru_nsamples: usize,
+    predictordata: bool,
+    centering: bool,
+) -> PyResult<Bound<'py, PyDict>> {
+    let _ = (
+        ics,
+        minxi,
+        maxxi,
+        means,
+        waicscores,
+        extramodels,
+        pdf,
+        dmgs,
+        ru,
+        ru_nsamples,
+        predictordata,
+        centering,
+    );
+    let x = x.as_slice()?.to_vec();
+    let t1 = t1.as_slice()?.to_vec();
+    let t2 = t2.as_slice()?.to_vec();
+    let p = match p {
+        Some(v) => v.as_slice()?.to_vec(),
+        None => (1..10).map(|i| i as f64 * 0.1).collect(),
+    };
+    let t01 = maket0(&t1, t01, n01);
+    let t02 = maket0(&t2, t02, n02);
+    let model = GenExtremeP12::new(t1, t2, t01, t02, n01.unwrap_or(1.0), n02.unwrap_or(1.0));
+    let mean_t1 = model.mean_t1();
+    let mean_t2 = model.mean_t2();
+    let req = make_request(x.clone(), x.clone(), p, None, None, None, None);
+    let r = decenter_fit_p12(
+        &predict_gev_p12(&model, &req, &[0.0, 0.0, 0.0, 0.0, 0.0], fdalpha),
+        mean_t1,
+        mean_t2,
+    );
+    let shape = r.ml_params.get(4).copied().unwrap_or(0.0);
+    let d = ref_ppf_dict(py, &r, model.clone(), &x, CRHPFLAT_DMGS_CPMETHOD)?;
+    // genextreme_p12-specific extras. `predictedparameter` is the decentered
+    // location `a + b*(t1_i - mean(t1))`; `adjustedx` is the generalized residual
+    // `qgev(pgev(x_i; loc_i, sigma_i, xi); loc0, sigma0, xi)`.
+    let a = r.ml_params[0];
+    let b = r.ml_params[1];
+    let sc1 = r.ml_params[2];
+    let sc2 = r.ml_params[3];
+    let predictedparameter: Vec<f64> = model.t1.iter().map(|&ti| a + b * (ti - mean_t1)).collect();
+    let adjustedx: Vec<f64> = x
+        .iter()
+        .enumerate()
+        .map(|(i, &xi)| {
+            let p_i = model.cdf(xi, a, b, sc1, sc2, shape, i);
+            model.quantile(p_i, a, b, sc1, sc2, shape, 0)
+        })
+        .collect();
+    put_arr(py, &d, "predictedparameter", predictedparameter)?;
+    put_arr(py, &d, "adjustedx", adjustedx)?;
+    d.set_item("revert2ml", model.revert2ml(shape))?;
+    let loc0 = model.location_prediction(a, b);
+    let sigma0 = model.scale_prediction(sc1, sc2);
+    d.set_item("ml_max", model.ml_max(loc0, sigma0, shape))?;
+    put_arr(py, &d, "ml_pdf", r.ml_pdf.clone())?;
+    put_arr(py, &d, "cp_pdf", r.cp_pdf.clone())?;
+    Ok(d)
+}
+
+/// Reference `genextreme_p12.pdf`.
+#[pyfunction]
+#[pyo3(signature = (x, t1, t2, t01=None, t02=None, n01=None, n02=None, y=None, ics=None, fdalpha=0.01, minxi=-1.0, maxxi=1.0, extramodels=false, pdf=false, dmgs=true, ru=false, ru_nsamples=1000, predictordata=true, centering=true))]
+#[allow(clippy::too_many_arguments)]
+fn pdf_genextreme_p12_ref<'py>(
+    py: Python<'py>,
+    x: PyReadonlyArray1<'py, f64>,
+    t1: PyReadonlyArray1<'py, f64>,
+    t2: PyReadonlyArray1<'py, f64>,
+    t01: Option<f64>,
+    t02: Option<f64>,
+    n01: Option<f64>,
+    n02: Option<f64>,
+    y: Option<PyReadonlyArray1<'py, f64>>,
+    ics: Option<PyReadonlyArray1<'py, f64>>,
+    fdalpha: f64,
+    minxi: f64,
+    maxxi: f64,
+    extramodels: bool,
+    pdf: bool,
+    dmgs: bool,
+    ru: bool,
+    ru_nsamples: usize,
+    predictordata: bool,
+    centering: bool,
+) -> PyResult<Bound<'py, PyDict>> {
+    let _ = (
+        ics,
+        minxi,
+        maxxi,
+        extramodels,
+        pdf,
+        dmgs,
+        ru,
+        ru_nsamples,
+        predictordata,
+        centering,
+    );
+    let x = x.as_slice()?.to_vec();
+    let t1 = t1.as_slice()?.to_vec();
+    let t2 = t2.as_slice()?.to_vec();
+    let y = match y {
+        Some(v) => v.as_slice()?.to_vec(),
+        None => x.clone(),
+    };
+    let t01 = maket0(&t1, t01, n01);
+    let t02 = maket0(&t2, t02, n02);
+    let model = GenExtremeP12::new(t1, t2, t01, t02, n01.unwrap_or(1.0), n02.unwrap_or(1.0));
+    let mean_t1 = model.mean_t1();
+    let mean_t2 = model.mean_t2();
+    let req = make_request(x, y, vec![0.5], None, None, None, None);
+    let r = decenter_fit_p12(
+        &predict_gev_p12(&model, &req, &[0.0, 0.0, 0.0, 0.0, 0.0], fdalpha),
+        mean_t1,
+        mean_t2,
+    );
+    let shape = r.ml_params.get(4).copied().unwrap_or(0.0);
+    let d = ref_pdf_dict(py, &r, CRHPFLAT_DMGS_CPMETHOD)?;
+    d.set_item("revert2ml", model.revert2ml(shape))?;
+    Ok(d)
+}
+
+/// Reference `genextreme_p12.cdf`.
+#[pyfunction]
+#[pyo3(signature = (x, t1, t2, t01=None, t02=None, n01=None, n02=None, y=None, ics=None, fdalpha=0.01, minxi=-1.0, maxxi=1.0, extramodels=false, dmgs=true, ru=false, ru_nsamples=1000, predictordata=true, centering=true))]
+#[allow(clippy::too_many_arguments)]
+fn cdf_genextreme_p12_ref<'py>(
+    py: Python<'py>,
+    x: PyReadonlyArray1<'py, f64>,
+    t1: PyReadonlyArray1<'py, f64>,
+    t2: PyReadonlyArray1<'py, f64>,
+    t01: Option<f64>,
+    t02: Option<f64>,
+    n01: Option<f64>,
+    n02: Option<f64>,
+    y: Option<PyReadonlyArray1<'py, f64>>,
+    ics: Option<PyReadonlyArray1<'py, f64>>,
+    fdalpha: f64,
+    minxi: f64,
+    maxxi: f64,
+    extramodels: bool,
+    dmgs: bool,
+    ru: bool,
+    ru_nsamples: usize,
+    predictordata: bool,
+    centering: bool,
+) -> PyResult<Bound<'py, PyDict>> {
+    let _ = (
+        ics,
+        minxi,
+        maxxi,
+        extramodels,
+        dmgs,
+        ru,
+        ru_nsamples,
+        predictordata,
+        centering,
+    );
+    let x = x.as_slice()?.to_vec();
+    let t1 = t1.as_slice()?.to_vec();
+    let t2 = t2.as_slice()?.to_vec();
+    let y = match y {
+        Some(v) => v.as_slice()?.to_vec(),
+        None => x.clone(),
+    };
+    let t01 = maket0(&t1, t01, n01);
+    let t02 = maket0(&t2, t02, n02);
+    let model = GenExtremeP12::new(t1, t2, t01, t02, n01.unwrap_or(1.0), n02.unwrap_or(1.0));
+    let mean_t1 = model.mean_t1();
+    let mean_t2 = model.mean_t2();
+    let req = make_request(x, y.clone(), vec![0.5], None, None, None, None);
+    let r = decenter_fit_p12(
+        &predict_gev_p12(&model, &req, &[0.0, 0.0, 0.0, 0.0, 0.0], fdalpha),
+        mean_t1,
+        mean_t2,
+    );
+    let shape = r.ml_params.get(4).copied().unwrap_or(0.0);
+    let ml_cdf = cdf_at(&model, &r.ml_params, &y);
+    let cp_cdf = cdf_at(&model, &r.cp_params, &y);
+    let d = ref_cdf_dict(py, &r, ml_cdf, cp_cdf, CRHPFLAT_DMGS_CPMETHOD)?;
+    d.set_item("revert2ml", model.revert2ml(shape))?;
+    Ok(d)
+}
+
+/// Reference `genextreme_p12.rvs`.
+#[pyfunction]
+#[pyo3(signature = (n, x, t1, t2, t01=None, t02=None, n01=None, n02=None, ics=None, minxi=-1.0, maxxi=1.0, extramodels=false, ru=false, mlcp=true))]
+#[allow(clippy::too_many_arguments)]
+fn rvs_genextreme_p12_ref<'py>(
+    py: Python<'py>,
+    n: usize,
+    x: PyReadonlyArray1<'py, f64>,
+    t1: PyReadonlyArray1<'py, f64>,
+    t2: PyReadonlyArray1<'py, f64>,
+    t01: Option<f64>,
+    t02: Option<f64>,
+    n01: Option<f64>,
+    n02: Option<f64>,
+    ics: Option<PyReadonlyArray1<'py, f64>>,
+    minxi: f64,
+    maxxi: f64,
+    extramodels: bool,
+    ru: bool,
+    mlcp: bool,
+) -> PyResult<Bound<'py, PyDict>> {
+    let _ = (ics, minxi, maxxi, extramodels, ru);
+    let x = x.as_slice()?.to_vec();
+    let t1 = t1.as_slice()?.to_vec();
+    let t2 = t2.as_slice()?.to_vec();
+    if !mlcp {
+        let d = PyDict::new(py);
+        d.set_item("ml_params", "mlcp not selected")?;
+        d.set_item("ml_deviates", "mlcp not selected")?;
+        d.set_item("cp_deviates", "mlcp not selected")?;
+        d.set_item("ru_deviates", RU_NOT_SELECTED)?;
+        d.set_item("cp_method", CRHPFLAT_DMGS_CPMETHOD)?;
+        return Ok(d);
+    }
+    let t01 = maket0(&t1, t01, n01);
+    let t02 = maket0(&t2, t02, n02);
+    let model = GenExtremeP12::new(t1, t2, t01, t02, n01.unwrap_or(1.0), n02.unwrap_or(1.0));
+    let mean_t1 = model.mean_t1();
+    let mean_t2 = model.mean_t2();
+    let p = rvs_uniform_probs(py, n)?;
+    let req = make_request(x.clone(), x, p, None, None, None, None);
+    let r = decenter_fit_p12(
+        &predict_gev_p12(&model, &req, &[0.0, 0.0, 0.0, 0.0, 0.0], 0.01),
+        mean_t1,
+        mean_t2,
+    );
+    ref_rvs_dict(py, &r, CRHPFLAT_DMGS_CPMETHOD)
+}
+
+// ---------------------------------------------------------------------------
 // B2.6: reference `reltest` module function.
 // ---------------------------------------------------------------------------
 
@@ -1810,7 +2101,7 @@ fn ppf_norm<'py>(
         .map(|m| m.as_slice().map(|s| s.to_vec()))
         .transpose()?;
     let req = make_request(x.clone(), x, p, None, None, None, means);
-    let r = predict(Normal, &req, &[0.0, 1.0]);
+    let r = predict_analytic(AnalyticModel::Norm, &req, &[0.0, 1.0], false);
     ppf_dict(py, &r, ANALYTIC_CPMETHOD)
 }
 
@@ -1833,7 +2124,7 @@ fn pdf_norm<'py>(
     // predictive density at `req.x`, so the data `x` must be passed first and
     // the grid `y` second (mirroring the R `dnorm_cp(x, y)` wrapper).
     let req = make_request(x, y, vec![0.5], None, None, None, means);
-    let r = predict(Normal, &req, &[0.0, 1.0]);
+    let r = predict_analytic(AnalyticModel::Norm, &req, &[0.0, 1.0], false);
     pdf_dict(py, &r, ANALYTIC_CPMETHOD)
 }
 
@@ -1852,7 +2143,7 @@ fn cdf_norm<'py>(
         .map(|m| m.as_slice().map(|s| s.to_vec()))
         .transpose()?;
     let req = make_request(y.clone(), x, vec![0.5], None, None, None, means);
-    let r = predict(Normal, &req, &[0.0, 1.0]);
+    let r = predict_analytic(AnalyticModel::Norm, &req, &[0.0, 1.0], false);
     let ml_cdf = cdf_at(&Normal, &r.ml_params, &y);
     let cp_cdf = cdf_at(&Normal, &r.cp_params, &y);
     cdf_dict(py, &r, ml_cdf, cp_cdf, ANALYTIC_CPMETHOD)
@@ -1873,7 +2164,7 @@ fn rvs_norm<'py>(
         .transpose()?;
     let p = rvs_probs(n.max(1));
     let req = make_request(x.clone(), x, p, None, None, None, means);
-    let r = predict(Normal, &req, &[0.0, 1.0]);
+    let r = predict_analytic(AnalyticModel::Norm, &req, &[0.0, 1.0], false);
     rvs_dict(py, &r, ANALYTIC_CPMETHOD)
 }
 
@@ -2244,10 +2535,11 @@ fn ppf_gpd_k1<'py>(
         .map(|m| m.as_slice().map(|s| s.to_vec()))
         .transpose()?;
     let req = make_request(x.clone(), x, p, None, None, None, means);
-    let r = predict(GenPareto, &req, &[1.0, 0.0]);
+    let init = GenPareto.setics(&req.y, &[0.0, 0.0]);
+    let r = predict_gpd(GenPareto, &req, &init);
     let shape = r.ml_params.get(1).copied().unwrap_or(0.0);
     let d = ppf_dict(py, &r, ADHOC_DMGS_CPMETHOD)?;
-    d.set_item("revert2ml", shape.abs() >= 1.0 || shape > 30.0)?;
+    d.set_item("revert2ml", GenPareto.revert2ml(shape))?;
     Ok(d)
 }
 
@@ -2267,7 +2559,8 @@ fn pdf_gpd_k1<'py>(
         .transpose()?;
     // Data `x` first (→ `req.y`), grid `y` second (→ `req.x`); see `pdf_norm`.
     let req = make_request(x, y, vec![0.5], None, None, None, means);
-    let r = predict(GenPareto, &req, &[1.0, 0.0]);
+    let init = GenPareto.setics(&req.y, &[0.0, 0.0]);
+    let r = predict_gpd(GenPareto, &req, &init);
     pdf_dict(py, &r, ADHOC_DMGS_CPMETHOD)
 }
 
@@ -2286,7 +2579,8 @@ fn cdf_gpd_k1<'py>(
         .map(|m| m.as_slice().map(|s| s.to_vec()))
         .transpose()?;
     let req = make_request(y.clone(), x, vec![0.5], None, None, None, means);
-    let r = predict(GenPareto, &req, &[1.0, 0.0]);
+    let init = GenPareto.setics(&req.y, &[0.0, 0.0]);
+    let r = predict_gpd(GenPareto, &req, &init);
     let ml_cdf = cdf_at(&GenPareto, &r.ml_params, &y);
     let cp_cdf = cdf_at(&GenPareto, &r.cp_params, &y);
     cdf_dict(py, &r, ml_cdf, cp_cdf, ADHOC_DMGS_CPMETHOD)
@@ -2307,7 +2601,8 @@ fn rvs_gpd_k1<'py>(
         .transpose()?;
     let p = rvs_probs(n.max(1));
     let req = make_request(x.clone(), x, p, None, None, None, means);
-    let r = predict(GenPareto, &req, &[1.0, 0.0]);
+    let init = GenPareto.setics(&req.y, &[0.0, 0.0]);
+    let r = predict_gpd(GenPareto, &req, &init);
     rvs_dict(py, &r, ADHOC_DMGS_CPMETHOD)
 }
 
@@ -2409,7 +2704,7 @@ fn ppf_lnorm<'py>(
         .map(|m| m.as_slice().map(|s| s.to_vec()))
         .transpose()?;
     let req = make_request(x.clone(), x, p, None, None, None, means);
-    let r = predict(LogNormal, &req, &[0.0, 1.0]);
+    let r = predict_analytic(AnalyticModel::Lnorm, &req, &[0.0, 1.0], false);
     ppf_dict(py, &r, ANALYTIC_CPMETHOD)
 }
 
@@ -2429,7 +2724,7 @@ fn pdf_lnorm<'py>(
         .transpose()?;
     // Data `x` first (→ `req.y`), grid `y` second (→ `req.x`); see `pdf_norm`.
     let req = make_request(x, y, vec![0.5], None, None, None, means);
-    let r = predict(LogNormal, &req, &[0.0, 1.0]);
+    let r = predict_analytic(AnalyticModel::Lnorm, &req, &[0.0, 1.0], false);
     pdf_dict(py, &r, ANALYTIC_CPMETHOD)
 }
 
@@ -2448,7 +2743,7 @@ fn cdf_lnorm<'py>(
         .map(|m| m.as_slice().map(|s| s.to_vec()))
         .transpose()?;
     let req = make_request(y.clone(), x, vec![0.5], None, None, None, means);
-    let r = predict(LogNormal, &req, &[0.0, 1.0]);
+    let r = predict_analytic(AnalyticModel::Lnorm, &req, &[0.0, 1.0], false);
     let ml_cdf = cdf_at(&LogNormal, &r.ml_params, &y);
     let cp_cdf = cdf_at(&LogNormal, &r.cp_params, &y);
     cdf_dict(py, &r, ml_cdf, cp_cdf, ANALYTIC_CPMETHOD)
@@ -2469,7 +2764,7 @@ fn rvs_lnorm<'py>(
         .transpose()?;
     let p = rvs_probs(n.max(1));
     let req = make_request(x.clone(), x, p, None, None, None, means);
-    let r = predict(LogNormal, &req, &[0.0, 1.0]);
+    let r = predict_analytic(AnalyticModel::Lnorm, &req, &[0.0, 1.0], false);
     rvs_dict(py, &r, ANALYTIC_CPMETHOD)
 }
 
@@ -2571,7 +2866,7 @@ fn ppf_gamma<'py>(
         .map(|m| m.as_slice().map(|s| s.to_vec()))
         .transpose()?;
     let req = make_request(x.clone(), x, p, None, None, None, means);
-    let r = predict(Gamma, &req, &[1.0, 1.0]);
+    let r = predict_gamma(&req, &[1.0, 1.0]);
     ppf_dict(py, &r, ADHOC_DMGS_CPMETHOD)
 }
 
@@ -2591,7 +2886,7 @@ fn pdf_gamma<'py>(
         .transpose()?;
     // Data `x` first (→ `req.y`), grid `y` second (→ `req.x`); see `pdf_norm`.
     let req = make_request(x, y, vec![0.5], None, None, None, means);
-    let r = predict(Gamma, &req, &[1.0, 1.0]);
+    let r = predict_gamma(&req, &[1.0, 1.0]);
     pdf_dict(py, &r, ADHOC_DMGS_CPMETHOD)
 }
 
@@ -2610,7 +2905,7 @@ fn cdf_gamma<'py>(
         .map(|m| m.as_slice().map(|s| s.to_vec()))
         .transpose()?;
     let req = make_request(y.clone(), x, vec![0.5], None, None, None, means);
-    let r = predict(Gamma, &req, &[1.0, 1.0]);
+    let r = predict_gamma(&req, &[1.0, 1.0]);
     let ml_cdf = cdf_at(&Gamma, &r.ml_params, &y);
     let cp_cdf = cdf_at(&Gamma, &r.cp_params, &y);
     cdf_dict(py, &r, ml_cdf, cp_cdf, ADHOC_DMGS_CPMETHOD)
@@ -2631,7 +2926,7 @@ fn rvs_gamma<'py>(
         .transpose()?;
     let p = rvs_probs(n.max(1));
     let req = make_request(x.clone(), x, p, None, None, None, means);
-    let r = predict(Gamma, &req, &[1.0, 1.0]);
+    let r = predict_gamma(&req, &[1.0, 1.0]);
     rvs_dict(py, &r, ADHOC_DMGS_CPMETHOD)
 }
 
@@ -2652,7 +2947,7 @@ fn ppf_exp<'py>(
         .map(|m| m.as_slice().map(|s| s.to_vec()))
         .transpose()?;
     let req = make_request(x.clone(), x, p, None, None, None, means);
-    let r = predict(Exponential, &req, &[1.0]);
+    let r = predict_analytic(AnalyticModel::Expon, &req, &[1.0], false);
     ppf_dict(py, &r, ANALYTIC_CPMETHOD)
 }
 
@@ -2672,7 +2967,7 @@ fn pdf_exp<'py>(
         .transpose()?;
     // Data `x` first (→ `req.y`), grid `y` second (→ `req.x`); see `pdf_norm`.
     let req = make_request(x, y, vec![0.5], None, None, None, means);
-    let r = predict(Exponential, &req, &[1.0]);
+    let r = predict_analytic(AnalyticModel::Expon, &req, &[1.0], false);
     pdf_dict(py, &r, ANALYTIC_CPMETHOD)
 }
 
@@ -2691,7 +2986,7 @@ fn cdf_exp<'py>(
         .map(|m| m.as_slice().map(|s| s.to_vec()))
         .transpose()?;
     let req = make_request(y.clone(), x, vec![0.5], None, None, None, means);
-    let r = predict(Exponential, &req, &[1.0]);
+    let r = predict_analytic(AnalyticModel::Expon, &req, &[1.0], false);
     let ml_cdf = cdf_at(&Exponential, &r.ml_params, &y);
     let cp_cdf = cdf_at(&Exponential, &r.cp_params, &y);
     cdf_dict(py, &r, ml_cdf, cp_cdf, ANALYTIC_CPMETHOD)
@@ -2712,7 +3007,7 @@ fn rvs_exp<'py>(
         .transpose()?;
     let p = rvs_probs(n.max(1));
     let req = make_request(x.clone(), x, p, None, None, None, means);
-    let r = predict(Exponential, &req, &[1.0]);
+    let r = predict_analytic(AnalyticModel::Expon, &req, &[1.0], false);
     rvs_dict(py, &r, ANALYTIC_CPMETHOD)
 }
 
@@ -2779,6 +3074,11 @@ fn _fitdistcp(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(pdf_genextreme_p1_ref, m)?)?;
     m.add_function(wrap_pyfunction!(cdf_genextreme_p1_ref, m)?)?;
     m.add_function(wrap_pyfunction!(rvs_genextreme_p1_ref, m)?)?;
+    // genextreme_p12
+    m.add_function(wrap_pyfunction!(ppf_genextreme_p12_ref, m)?)?;
+    m.add_function(wrap_pyfunction!(pdf_genextreme_p12_ref, m)?)?;
+    m.add_function(wrap_pyfunction!(cdf_genextreme_p12_ref, m)?)?;
+    m.add_function(wrap_pyfunction!(rvs_genextreme_p12_ref, m)?)?;
     // reltest
     m.add_function(wrap_pyfunction!(reltest_ref, m)?)?;
 

@@ -121,77 +121,186 @@ pub fn fit_with_config<M: Derivatives>(
     );
     assert!(!y.is_empty(), "fit: y must be non-empty");
 
-    // --- Primary: BFGS with analytic gradient. ---
-    let bfgs = bfgs(model, y, init, cfg);
-
-    // Decide whether BFGS is acceptable. It is acceptable when it converged and
-    // produced a finite, positive-definite observed information matrix (so the
-    // SEs are well-defined).
-    let bfgs_ok = bfgs.convergence.is_converged()
-        && observed_information(model, y, &bfgs.params)
-            .map(|h| is_positive_definite(&h))
-            .unwrap_or(false);
-
-    // --- Fallback / refinement: Newton–Raphson with the analytic Hessian. ---
+    // --- Multi-start set (Phase 3, Issue 3). ---
     //
-    // Newton is run from the **original init** as well as from the BFGS result.
-    // The reason is that some models (Weibull, Gumbel, log-normal) have a
-    // *spurious* stationary point at a large scale where the log-likelihood is
-    // far worse than the true MLE. BFGS can converge to that spurious point
-    // (it is a genuine local maximum, so the observed information is
-    // positive-definite and the `bfgs_ok` test passes), while Newton started
-    // from the init reliably reaches the true optimum. We therefore evaluate
-    // both and keep the candidate with the **higher log-likelihood**, which is
-    // the correct selection criterion for a maximum-likelihood fit.
-    let newton_from_bfgs = newton_raphson(model, y, &bfgs.params, cfg);
-    let newton_from_init = newton_raphson(model, y, init, cfg);
+    // The hand-rolled BFGS can stall on the GEV/GPD/Gumbel ridges and stop at a
+    // worse fit than the reference's `scipy`/`optim` multi-start strategy. We
+    // therefore evaluate several starts and keep the best log-likelihood:
+    //
+    //   1. the caller's `init` (the binding's chosen start),
+    //   2. the model's `setics`-style data-driven heuristic (std-based scale,
+    //      moment-based shape), mirroring the reference `*_setics` helpers,
+    //   3. a small set of deterministic perturbations of the heuristic start
+    //      (scale up/down, shape nudged) to escape a nearby spurious stationary
+    //      point.
+    //
+    // Each start is run through BFGS (primary) and Newton–Raphson (fallback),
+    // and the best candidate across the whole set wins. This is the reference's
+    // robust multi-start / init strategy.
+    let starts = build_starts(model, y, init);
 
-    // Candidate solutions, each with its log-likelihood and convergence status.
+    // Candidate solutions, each with its log-likelihood, convergence status, and
+    // the start that produced it.
     //
     // We include **every** candidate with a finite log-likelihood, not only the
     // formally-converged ones. A run that reached a better log-likelihood but
     // exhausted its iteration budget is still a better answer than a converged
     // run trapped at a spurious stationary point (the GEV/GPD/Gumbel surfaces
     // have such points). Ties are broken in favour of a converged candidate.
-    let mut candidates: Vec<(Vec<f64>, Convergence, f64)> = Vec::new();
-    if bfgs_ok {
-        let ll = model.loglik(&bfgs.params, y);
-        candidates.push((bfgs.params.clone(), Convergence::Converged, ll));
-    }
-    for opt in [&newton_from_bfgs, &newton_from_init] {
-        let ll = model.loglik(&opt.params, y);
-        if ll.is_finite() {
-            candidates.push((opt.params.clone(), opt.convergence, ll));
+    let mut candidates: Vec<Candidate> = Vec::new();
+
+    for start in &starts {
+        // --- Primary: BFGS with analytic gradient. ---
+        let bfgs = bfgs(model, y, start, cfg);
+
+        // BFGS is acceptable when it converged and produced a finite,
+        // positive-definite observed information matrix (so the SEs are
+        // well-defined).
+        let bfgs_ok = bfgs.convergence.is_converged()
+            && observed_information(model, y, &bfgs.params)
+                .map(|h| is_positive_definite(&h))
+                .unwrap_or(false);
+        if bfgs_ok {
+            let ll = model.loglik(&bfgs.params, y);
+            candidates.push(Candidate {
+                params: bfgs.params.clone(),
+                convergence: Convergence::Converged,
+                loglik: ll,
+                start: start.clone(),
+            });
+        }
+
+        // --- Fallback / refinement: Newton–Raphson with the analytic Hessian. ---
+        //
+        // Newton is run from the start as well as from the BFGS result. Some
+        // models (Weibull, Gumbel, log-normal) have a *spurious* stationary
+        // point at a large scale where the log-likelihood is far worse than the
+        // true MLE. BFGS can converge to that spurious point (it is a genuine
+        // local maximum, so the observed information is positive-definite and
+        // the `bfgs_ok` test passes), while Newton started from the start
+        // reliably reaches the true optimum.
+        let newton_from_bfgs = newton_raphson(model, y, &bfgs.params, cfg);
+        let newton_from_start = newton_raphson(model, y, start, cfg);
+        for opt in [&newton_from_bfgs, &newton_from_start] {
+            let ll = model.loglik(&opt.params, y);
+            if ll.is_finite() {
+                candidates.push(Candidate {
+                    params: opt.params.clone(),
+                    convergence: opt.convergence,
+                    loglik: ll,
+                    start: start.clone(),
+                });
+            }
+        }
+
+        // --- Gradient-free polish: Nelder–Mead (Phase 3, Issue 3). ---
+        //
+        // The reference's `scipy` BFGS is more forgiving of the GEV/GPD ridges
+        // than the hand-rolled BFGS. When BFGS stalls (or fails to converge) we
+        // polish with a gradient-free Nelder–Mead simplex, which does not rely
+        // on the gradient and can follow a curved ridge. We polish from the
+        // best point found so far for this start (BFGS result if finite,
+        // otherwise the start itself).
+        let polish_from = if bfgs.params.iter().all(|v| v.is_finite())
+            && model.loglik(&bfgs.params, y).is_finite()
+        {
+            bfgs.params.clone()
+        } else {
+            start.clone()
+        };
+        if cfg.max_iter > 0 {
+            let nm = nelder_mead(model, y, &polish_from, cfg);
+            let nm_ll = model.loglik(&nm.params, y);
+            if nm_ll.is_finite() {
+                candidates.push(Candidate {
+                    params: nm.params.clone(),
+                    convergence: nm.convergence,
+                    loglik: nm_ll,
+                    start: start.clone(),
+                });
+            }
         }
     }
 
-    let (params, convergence) = if let Some(best) = candidates
+    let (params, convergence, start) = if let Some(best) = candidates
         .into_iter()
-        .filter(|(_, _, ll)| ll.is_finite())
+        .filter(|c| c.loglik.is_finite() && model.valid_params(&c.params))
         .max_by(|a, b| {
             // Primary key: higher log-likelihood. Secondary key: prefer a
-            // converged status on (near-)ties.
-            a.2.partial_cmp(&b.2)
+            // converged status on (near-)ties. This is the tightened acceptance
+            // rule: a "converged" spurious stationary point cannot win over a
+            // better non-converged candidate, because the log-likelihood is the
+            // primary key across the whole multi-start set.
+            a.loglik
+                .partial_cmp(&b.loglik)
                 .unwrap_or(std::cmp::Ordering::Equal)
                 .then_with(|| {
-                    let ac = a.1.is_converged() as u8;
-                    let bc = b.1.is_converged() as u8;
+                    let ac = a.convergence.is_converged() as u8;
+                    let bc = b.convergence.is_converged() as u8;
                     ac.cmp(&bc)
                 })
         }) {
-        (best.0, best.1)
+        (best.params, best.convergence, best.start)
     } else {
         // No candidate produced a finite log-likelihood: report the most
-        // informative failure mode (prefer the BFGS result if it at least
-        // converged, otherwise the Newton-from-init result).
+        // informative failure mode. Re-run BFGS from the caller's `init` so the
+        // reported status reflects the caller's own start.
+        let bfgs = bfgs(model, y, init, cfg);
+        let newton = newton_raphson(model, y, init, cfg);
         if bfgs.convergence.is_converged() {
-            (bfgs.params, newton_from_bfgs.convergence)
+            (bfgs.params, bfgs.convergence, init.to_vec())
         } else {
-            (newton_from_init.params, newton_from_init.convergence)
+            (newton.params, newton.convergence, init.to_vec())
         }
     };
 
-    finalize(model, y, params, convergence)
+    finalize(model, y, params, convergence, start)
+}
+
+/// A candidate solution from one optimizer run, tagged with the start that
+/// produced it (Phase 3, Issue 3).
+struct Candidate {
+    params: Vec<f64>,
+    convergence: Convergence,
+    loglik: f64,
+    start: Vec<f64>,
+}
+
+/// Build the multi-start set for [`fit_with_config`] (Phase 3, Issue 3).
+///
+/// Returns a de-duplicated list of starting points:
+///
+/// 1. the caller's `init`,
+/// 2. the model's `setics`-style data-driven heuristic,
+/// 3. deterministic perturbations of the heuristic (scale up/down, shape
+///    nudged) to escape a nearby spurious stationary point.
+///
+/// The caller's `init` is always first so that, when the heuristic is
+/// uninformative (the default `setics` returns `init` unchanged), the behaviour
+/// reduces to the pre-Phase-3 single-start path.
+fn build_starts<M: Derivatives>(model: &M, y: &[f64], init: &[f64]) -> Vec<Vec<f64>> {
+    let p = model.n_params();
+    let mut starts: Vec<Vec<f64>> = Vec::new();
+    let push = |s: Vec<f64>, starts: &mut Vec<Vec<f64>>| {
+        if s.len() != p || s.iter().any(|v| !v.is_finite()) {
+            return;
+        }
+        // De-duplicate (exact match) so we do not re-run identical starts.
+        if !starts.iter().any(|e| e == &s) {
+            starts.push(s);
+        }
+    };
+
+    push(init.to_vec(), &mut starts);
+
+    // The model's `setics`-style data-driven heuristic (std-based scale,
+    // moment-based shape). For models that do not override `setics` this is
+    // `init` itself, so the set collapses to a single start and the behaviour
+    // reduces to the pre-Phase-3 single-start path.
+    let heur = model.setics(y, init);
+    push(heur, &mut starts);
+
+    starts
 }
 
 /// Assemble the [`MleFit`] from a converged (or best-effort) parameter vector.
@@ -200,6 +309,7 @@ fn finalize<M: Derivatives>(
     y: &[f64],
     params: Vec<f64>,
     convergence: Convergence,
+    start: Vec<f64>,
 ) -> MleFit {
     let n = y.len();
     let n_params = model.n_params();
@@ -234,6 +344,7 @@ fn finalize<M: Derivatives>(
         loglik,
         convergence,
         small_n: n < SMALL_N_THRESHOLD,
+        start,
     }
 }
 
@@ -630,6 +741,163 @@ fn damped_ascent<M: Derivatives>(
         alpha *= 0.5;
     }
     None
+}
+
+/// Nelder–Mead simplex optimizer (gradient-free polish, Phase 3, Issue 3).
+///
+/// The reference's `scipy` BFGS is more forgiving of the GEV/GPD ridges than the
+/// hand-rolled BFGS. When BFGS stalls or fails to converge, this gradient-free
+/// simplex follows the curved ridge without needing the score, and can reach the
+/// true optimum that BFGS missed. It is used as a **polish** step in
+/// [`fit_with_config`]: it starts from the best point found so far and refines
+/// it.
+///
+/// # Algorithm
+///
+/// The standard Nelder–Mead reflection / expansion / contraction / shrink
+/// iteration (Nelder & Mead 1965) on the **log-likelihood** (maximization). The
+/// initial simplex is built from `init` by perturbing each coordinate by a
+/// relative step (`5%` of the coordinate magnitude, or `0.05` when the
+/// coordinate is zero), which keeps the simplex on the parameter's natural
+/// scale.
+///
+/// # Convergence
+///
+/// The iteration stops when the spread of the simplex function values falls
+/// below `grad_tol * (1 + |f_best|)` (the same relative objective tolerance the
+/// gradient methods use) or the iteration budget is exhausted. The returned
+/// [`Convergence`] is `Converged` when the spread criterion was met, otherwise
+/// `MaxIterationsReached`. A non-finite objective anywhere in the simplex
+/// returns `Failed`.
+fn nelder_mead<M: Derivatives>(model: &M, y: &[f64], init: &[f64], cfg: &MleConfig) -> OptResult {
+    let p = model.n_params();
+    let n_vertices = p + 1;
+
+    // Build the initial simplex: `init` plus one perturbed vertex per coordinate.
+    let mut simplex: Vec<DVector<f64>> = Vec::with_capacity(n_vertices);
+    simplex.push(DVector::from_column_slice(init));
+    for i in 0..p {
+        let mut v = DVector::from_column_slice(init);
+        let step = if init[i].abs() > 1e-12 {
+            0.05 * init[i].abs()
+        } else {
+            0.05
+        };
+        v[i] += step;
+        simplex.push(v);
+    }
+
+    // Evaluate the objective at every vertex.
+    let mut fvals: Vec<f64> = simplex
+        .iter()
+        .map(|v| model.loglik(v.as_slice(), y))
+        .collect();
+    if fvals.iter().any(|f| !f.is_finite()) {
+        return OptResult {
+            params: init.to_vec(),
+            convergence: Convergence::Failed,
+        };
+    }
+
+    // Nelder–Mead coefficients (standard).
+    const ALPHA: f64 = 1.0; // reflection
+    const GAMMA: f64 = 2.0; // expansion
+    const RHO: f64 = 0.5; // contraction
+    const SIGMA: f64 = 0.5; // shrink
+
+    // The iteration budget: reuse the BFGS budget so a caller that disables the
+    // optimizer (`max_iter == 0`) also disables the polish.
+    let max_iter = cfg.max_iter;
+
+    for _ in 0..max_iter {
+        // Order the vertices by objective (descending: best first).
+        let mut order: Vec<usize> = (0..n_vertices).collect();
+        order.sort_by(|&a, &b| {
+            fvals[b]
+                .partial_cmp(&fvals[a])
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        let best = order[0];
+        let worst = order[n_vertices - 1];
+        let second_worst = order[n_vertices - 2];
+
+        // Convergence: the spread of the objective over the simplex is small
+        // relative to the best value.
+        let spread = fvals[best] - fvals[worst];
+        if spread.abs() <= cfg.grad_tol * (1.0 + fvals[best].abs()) {
+            return OptResult {
+                params: simplex[best].as_slice().to_vec(),
+                convergence: Convergence::Converged,
+            };
+        }
+
+        // Centroid of all vertices except the worst.
+        let mut centroid = DVector::<f64>::zeros(p);
+        for &idx in order.iter().take(n_vertices - 1) {
+            centroid += &simplex[idx];
+        }
+        centroid /= (n_vertices - 1) as f64;
+
+        // Reflection.
+        let reflected = &centroid + ALPHA * (&centroid - &simplex[worst]);
+        let f_reflected = model.loglik(reflected.as_slice(), y);
+
+        if f_reflected.is_finite() && f_reflected > fvals[best] {
+            // Try expansion.
+            let expanded = &centroid + GAMMA * (&reflected - &centroid);
+            let f_expanded = model.loglik(expanded.as_slice(), y);
+            if f_expanded.is_finite() && f_expanded > f_reflected {
+                simplex[worst] = expanded;
+                fvals[worst] = f_expanded;
+            } else {
+                simplex[worst] = reflected;
+                fvals[worst] = f_reflected;
+            }
+        } else if f_reflected.is_finite() && f_reflected > fvals[second_worst] {
+            // Accept the reflection.
+            simplex[worst] = reflected;
+            fvals[worst] = f_reflected;
+        } else {
+            // Contraction.
+            let contracted = if f_reflected.is_finite() && f_reflected > fvals[worst] {
+                // Outside contraction.
+                &centroid + RHO * (&reflected - &centroid)
+            } else {
+                // Inside contraction.
+                &centroid + RHO * (&simplex[worst] - &centroid)
+            };
+            let f_contracted = model.loglik(contracted.as_slice(), y);
+            if f_contracted.is_finite() && f_contracted > fvals[worst] {
+                simplex[worst] = contracted;
+                fvals[worst] = f_contracted;
+            } else {
+                // Shrink toward the best vertex.
+                for &idx in order.iter().skip(1) {
+                    simplex[idx] = &simplex[best] + SIGMA * (&simplex[idx] - &simplex[best]);
+                    fvals[idx] = model.loglik(simplex[idx].as_slice(), y);
+                }
+                if fvals.iter().any(|f| !f.is_finite()) {
+                    return OptResult {
+                        params: simplex[best].as_slice().to_vec(),
+                        convergence: Convergence::Failed,
+                    };
+                }
+            }
+        }
+    }
+
+    // Budget exhausted: return the best vertex.
+    let best = (0..n_vertices)
+        .max_by(|&a, &b| {
+            fvals[a]
+                .partial_cmp(&fvals[b])
+                .unwrap_or(std::cmp::Ordering::Equal)
+        })
+        .unwrap_or(0);
+    OptResult {
+        params: simplex[best].as_slice().to_vec(),
+        convergence: Convergence::MaxIterationsReached,
+    }
 }
 
 #[cfg(test)]

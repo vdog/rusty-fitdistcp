@@ -88,6 +88,65 @@ impl GenPareto {
         }
         (scale / shape) * ((1.0 - p).powf(-shape) - 1.0)
     }
+
+    /// Set the GPD initial conditions, mirroring the reference `gpd_k1_setics`
+    /// (Issue 2, Phase 2).
+    ///
+    /// The reference `gpd_k1_setics(x, ics)` replaces a sentinel `ics = [0, 0]`
+    /// with `[sd(x), 0]` (the sample standard deviation with the `n-1`
+    /// denominator, i.e. R's `sd`), and otherwise returns `ics` unchanged:
+    ///
+    /// ```text
+    /// if (ics[0] == 0) && (ics[1] == 0):
+    ///     ics = [std(x, ddof=1), 0]
+    /// ```
+    ///
+    /// This is the fix for the dollar-scale defect: the binding previously
+    /// hard-coded `init = [1.0, 0.0]`, which is many orders of magnitude below
+    /// the scale of raw dollar data (~10^3–10^5), so the optimizer started in a
+    /// region where the GPD log-likelihood is flat/degenerate and silently
+    /// returned `NaN`. Seeding the scale from the data's own standard deviation
+    /// puts the optimizer on the right scale.
+    ///
+    /// `x` is the observed data and `ics` the caller's initial conditions. The
+    /// returned vector has length 2 (`[scale, shape]`).
+    pub fn setics(&self, x: &[f64], ics: &[f64]) -> Vec<f64> {
+        if ics.len() == 2 && ics[0] == 0.0 && ics[1] == 0.0 {
+            vec![sample_std_ddof1(x), 0.0]
+        } else {
+            ics.to_vec()
+        }
+    }
+
+    /// Whether the DMGS expansion must revert to the MLE (reference `revert2ml`).
+    ///
+    /// The reference `qgpd_k1_cp` sets
+    /// `revert2ml = (abs(v2hat) >= 1) || (v2hat > 30)`: when the fitted shape
+    /// magnitude reaches 1, or the shape exceeds 30, the DMGS expansion is
+    /// numerically unreliable, so the reference reverts the CP output to the MLE
+    /// output. The `v2hat > 30` clause (Issue 2, Phase 2) guards the
+    /// large-positive-shape case where `lddi` cannot be computed and the code
+    /// would otherwise crash / return `NaN`.
+    pub fn revert2ml(&self, shape: f64) -> bool {
+        shape.abs() >= 1.0 || shape > 30.0
+    }
+}
+
+/// Sample standard deviation with the `n-1` denominator (R's `sd`, NumPy's
+/// `std(x, ddof=1)`), used by [`GenPareto::setics`].
+///
+/// Returns `0.0` for fewer than two observations (the reference `sd` would be
+/// `NA`; the GPD fit is undefined there anyway and the caller's small-n guard
+/// handles it).
+fn sample_std_ddof1(x: &[f64]) -> f64 {
+    let n = x.len();
+    if n < 2 {
+        return 0.0;
+    }
+    let nf = n as f64;
+    let mean = x.iter().sum::<f64>() / nf;
+    let ss: f64 = x.iter().map(|&xi| (xi - mean) * (xi - mean)).sum();
+    (ss / (nf - 1.0)).sqrt()
 }
 
 impl Derivatives for GenPareto {
@@ -99,6 +158,33 @@ impl Derivatives for GenPareto {
 
     fn n_params(&self) -> usize {
         2
+    }
+
+    /// `setics`-style initial conditions (reference `gpd_k1_setics`, Phase 3).
+    ///
+    /// The reference `gpd_k1_setics(x, ics)` replaces a sentinel `ics = [0, 0]`
+    /// with `[sd(x), 0]` (the `n-1` sample SD). The Rust multi-start strategy
+    /// uses this **data-driven** start as an additional start alongside the
+    /// caller's `init`, so it is returned unconditionally (the sentinel check is
+    /// the reference's way of deciding *whether* to use the heuristic; the
+    /// multi-start always wants it). The inherent [`GenPareto::setics`] keeps
+    /// the reference sentinel semantics for the binding.
+    fn setics(&self, y: &[f64], _init: &[f64]) -> Vec<f64> {
+        vec![crate::models::sample_std_ddof1(y), 0.0]
+    }
+
+    /// Reject the GPD degenerate region (Phase 3, Issue 3).
+    ///
+    /// The GPD log-likelihood has the same `scale -> 0` spurious maximum as the
+    /// GEV. The guard rejects a non-positive scale and a runaway shape
+    /// (`|shape| >= 10`); the shape bound is generous so it catches only the
+    /// runaway and does not reject the reference's legitimate fits.
+    fn valid_params(&self, params: &[f64]) -> bool {
+        params.len() == 2
+            && params[0] > 0.0
+            && params[0].is_finite()
+            && params[1].is_finite()
+            && params[1].abs() < 10.0
     }
 
     /// Analytic score (W9).
@@ -342,5 +428,69 @@ mod tests {
             fit.loglik,
             m.loglik(&init, &y)
         );
+    }
+
+    // --- Phase 2 (Issue 2): robust initial conditions -----------------------
+
+    #[test]
+    fn setics_uses_sample_std_for_zero_sentinel() {
+        // Reference `gpd_k1_setics`: ics = [0, 0] => [sd(x), 0] (n-1 denominator).
+        let m = GenPareto;
+        let x = vec![0.5, 1.2, 0.3, 2.1, 0.9, 1.7, 0.4, 1.1, 0.8, 1.5];
+        let ics = m.setics(&x, &[0.0, 0.0]);
+        assert_eq!(ics.len(), 2);
+        // R's sd(x) for this sample (n-1 denominator).
+        let n = x.len() as f64;
+        let mean = x.iter().sum::<f64>() / n;
+        let sd = (x.iter().map(|&xi| (xi - mean).powi(2)).sum::<f64>() / (n - 1.0)).sqrt();
+        assert_close(ics[0], sd, "setics scale");
+        assert_close(ics[1], 0.0, "setics shape");
+    }
+
+    #[test]
+    fn setics_passes_through_nonzero_ics() {
+        // A non-sentinel `ics` is returned unchanged (reference behaviour).
+        let m = GenPareto;
+        let x = vec![0.5, 1.2, 0.3, 2.1, 0.9];
+        let ics = m.setics(&x, &[2.5, -0.2]);
+        assert_eq!(ics, vec![2.5, -0.2]);
+    }
+
+    #[test]
+    fn setics_scales_with_dollar_scale_data() {
+        // The defect: dollar-scale data (~10^3-10^5) needs a scale init of the
+        // same order, not the hard-coded 1.0.
+        let m = GenPareto;
+        let x = vec![1200.0, 45000.0, 8300.0, 99000.0, 21000.0, 6700.0, 33000.0];
+        let ics = m.setics(&x, &[0.0, 0.0]);
+        assert!(
+            ics[0] > 1e3,
+            "dollar-scale setics scale {} should be O(10^4)",
+            ics[0]
+        );
+    }
+
+    #[test]
+    fn revert2ml_matches_reference_threshold() {
+        // Reference `qgpd_k1_cp`: revert2ml = (abs(v2hat) >= 1) || (v2hat > 30).
+        //
+        // The `abs(v2hat) >= 1` clause already covers every shape with
+        // magnitude >= 1, so the `v2hat > 30` clause is a documented redundancy
+        // in the reference (it can only fire for a shape that the first clause
+        // would also catch). We mirror the reference exactly and assert the
+        // combined predicate.
+        let m = GenPareto;
+        assert!(!m.revert2ml(0.0));
+        assert!(!m.revert2ml(0.5));
+        assert!(!m.revert2ml(-0.99));
+        assert!(m.revert2ml(1.0));
+        assert!(m.revert2ml(-1.0));
+        assert!(m.revert2ml(1.5));
+        assert!(m.revert2ml(-2.0));
+        // Shapes above 30 are caught (by the `abs >= 1` clause, and also by the
+        // `> 30` clause).
+        assert!(m.revert2ml(30.0));
+        assert!(m.revert2ml(30.5));
+        assert!(m.revert2ml(100.0));
     }
 }

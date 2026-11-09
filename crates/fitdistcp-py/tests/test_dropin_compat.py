@@ -11,7 +11,7 @@ the reference ``fitdistcp`` v0.0.4 submodule API:
 * ``pdf``/``cdf`` ``y=None`` defaults to ``y=x``.
 * ``rvs`` returns ``ml_deviates``/``cp_deviates``/``ru_deviates``.
 * The flat API still works and emits ``DeprecationWarning``.
-* ``rusty_fitdistcp.__all__`` omits ``genextreme_p12``.
+* ``rusty_fitdistcp.__all__`` includes ``genextreme_p12`` (Phase 6, Issue 6).
 
 Run inside the dev container after ``maturin develop``::
 
@@ -72,6 +72,7 @@ def test_all_reference_submodules_importable():
         "gamma",
         "genextreme",
         "genextreme_p1",
+        "genextreme_p12",
         "genpareto",
         "gumbel",
         "lnorm",
@@ -213,12 +214,12 @@ def test_undeprecated_flat_names_do_not_warn():
 
 
 # ---------------------------------------------------------------------------
-# `__all__` omits `genextreme_p12`.
+# `__all__` includes `genextreme_p12` (Phase 6, Issue 6).
 # ---------------------------------------------------------------------------
 
 
-def test_all_omits_genextreme_p12():
-    assert "genextreme_p12" not in rusty_fitdistcp.__all__
+def test_all_includes_genextreme_p12():
+    assert "genextreme_p12" in rusty_fitdistcp.__all__
     # The other reference submodules are present.
     for name in (
         "genextreme",
@@ -235,9 +236,13 @@ def test_all_omits_genextreme_p12():
         assert name in rusty_fitdistcp.__all__
 
 
-def test_genextreme_p12_not_importable():
-    """The deferred model is not exposed as a submodule."""
-    assert not hasattr(rusty_fitdistcp, "genextreme_p12")
+def test_genextreme_p12_importable():
+    """Phase 6 (Issue 6): the two-predictor model is exposed as a submodule."""
+    assert hasattr(rusty_fitdistcp, "genextreme_p12")
+    assert hasattr(rusty_fitdistcp.genextreme_p12, "ppf")
+    assert hasattr(rusty_fitdistcp.genextreme_p12, "pdf")
+    assert hasattr(rusty_fitdistcp.genextreme_p12, "cdf")
+    assert hasattr(rusty_fitdistcp.genextreme_p12, "rvs")
 
 
 # ---------------------------------------------------------------------------

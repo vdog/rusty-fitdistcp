@@ -43,8 +43,8 @@
 
 use crate::dmgs::DmgsModel;
 use crate::models::{
-    Exponential, Gamma, GenExtreme, GenExtremeP1, GenPareto, Gumbel, LogNormal, Normal, NormalP1,
-    Weibull,
+    Exponential, Gamma, GammaScale, GenExtreme, GenExtremeP1, GenExtremeP12, GenPareto, Gumbel,
+    LogNormal, Normal, NormalP1, Weibull,
 };
 
 /// The standard-normal density `φ(z) = exp(-z²/2)/√(2π)`.
@@ -702,6 +702,114 @@ impl DmgsModel for GenExtremeP1 {
     }
 }
 
+// --- genextreme_p12 ---------------------------------------------------------
+
+impl DmgsModel for GenExtremeP12 {
+    fn pdf(&self, x: f64, params: &[f64]) -> f64 {
+        // Evaluate at the prediction points `t01`/`t02` (the reference
+        // `tresid0`), not at observation 0: the DMGS expansion is reported at
+        // the prediction point.
+        let loc = self.location_prediction(params[0], params[1]);
+        let sigma = self.scale_prediction(params[2], params[3]);
+        let shape = params[4];
+        let z = (x - loc) / sigma;
+        if shape.abs() < 1e-12 {
+            return (-z - (-z).exp() - sigma.ln()).exp();
+        }
+        let t = 1.0 + shape * z;
+        if t <= 0.0 {
+            return 0.0;
+        }
+        (-sigma.ln() - (1.0 / shape + 1.0) * t.ln() - t.powf(-1.0 / shape)).exp()
+    }
+    fn cdf(&self, x: f64, params: &[f64]) -> f64 {
+        let loc = self.location_prediction(params[0], params[1]);
+        let sigma = self.scale_prediction(params[2], params[3]);
+        let shape = params[4];
+        let z = (x - loc) / sigma;
+        if shape.abs() < 1e-12 {
+            return (-(-z).exp()).exp();
+        }
+        let t = 1.0 + shape * z;
+        if t <= 0.0 {
+            return if shape > 0.0 { 0.0 } else { 1.0 };
+        }
+        (-t.powf(-1.0 / shape)).exp()
+    }
+    fn quantile(&self, p: f64, params: &[f64]) -> f64 {
+        let loc = self.location_prediction(params[0], params[1]);
+        let sigma = self.scale_prediction(params[2], params[3]);
+        let shape = params[4];
+        if shape.abs() < 1e-12 {
+            return loc - sigma * (-p.ln()).ln();
+        }
+        loc + (sigma / shape) * ((-p.ln()).powf(-shape) - 1.0)
+    }
+    fn log_prior_slope(&self, _params: &[f64]) -> Vec<f64> {
+        // Right-Haar prior on the scale. The scale is `exp(beta2 + scale*t2)`, so
+        // the log-slope w.r.t. the log-scale intercept `beta2` (index 2) is `-1`
+        // and w.r.t. the log-scale slope `scale` (index 3) is `-t2` at the
+        // prediction point. The reference `lambdad_rhp` for the `_p12` model is
+        // the right-Haar prior on the (predictor-dependent) scale; we mirror the
+        // `_p1` convention with the log-scale intercept carrying `-1`.
+        vec![0.0, 0.0, -1.0, 0.0, 0.0]
+    }
+
+    /// Analytic mean derivatives (reference `genextreme_p12_libs.py::gev_p12_means`).
+    ///
+    /// `ml_mean = ymn + slope·t01 + sigma·(g0-1)/xi` (or `+ sigma·γ` for xi=0),
+    /// where `sigma = exp(sigma1 + sigma2·t02)` and `t01`/`t02` are the centered
+    /// prediction points. The derivative array mirrors the reference with the
+    /// location/slope/log-scale-intercept/log-scale-slope/shape ordering.
+    fn mean_derivs(&self, params: &[f64]) -> (f64, Vec<f64>, Vec<f64>) {
+        use crate::special::{digamma, gamma, trigamma};
+        const EULER: f64 = 0.577_215_664_901_532_9;
+        let ymn = params[0];
+        let slope = params[1];
+        let sigma1 = params[2];
+        let sigma2 = params[3];
+        let xi = params[4];
+        let t01 = self.centered_prediction1();
+        let t02 = self.centered_prediction2();
+        let sigma = (sigma1 + sigma2 * t02).exp();
+        let mut meand1 = vec![0.0; 5];
+        let mut meand2 = vec![0.0; 25];
+        let ml_mean;
+        if xi == 0.0 {
+            ml_mean = ymn + slope * t01 + sigma * EULER;
+            meand1[0] = 1.0;
+            meand1[1] = t01;
+            // d/d(sigma1) = sigma·γ, d/d(sigma2) = sigma·γ·t02.
+            meand1[2] = sigma * EULER;
+            meand1[3] = sigma * EULER * t02;
+        } else {
+            let g0 = gamma(1.0 - xi);
+            let g1 = g0 * digamma(1.0 - xi);
+            let g2 = (trigamma(1.0 - xi) * g0 * g0 + g1 * g1) / g0;
+            let dsigma = (g0 - 1.0) / xi;
+            ml_mean = ymn + slope * t01 + sigma * dsigma;
+            meand1[0] = 1.0;
+            meand1[1] = t01;
+            meand1[2] = sigma * dsigma;
+            meand1[3] = sigma * dsigma * t02;
+            meand1[4] = (1.0 - g0 - xi * g1) * sigma / (xi * xi);
+            // Second derivatives. Indices are row-major 5x5 over
+            // [ymn, slope, sigma1, sigma2, xi].
+            // d²/d(sigma1)d(xi) = sigma·(1 - g0 - xi·g1)/xi²
+            let d2_s1_xi = sigma * (1.0 - g0 - xi * g1) / (xi * xi);
+            meand2[2 * 5 + 4] = d2_s1_xi;
+            meand2[4 * 5 + 2] = d2_s1_xi;
+            // d²/d(sigma2)d(xi) = t02 · d2_s1_xi
+            meand2[3 * 5 + 4] = t02 * d2_s1_xi;
+            meand2[4 * 5 + 3] = t02 * d2_s1_xi;
+            // d²/d(xi)² = sigma·(-2 + 2g0 + 2ξ·g1 + ξ²·g2)/ξ³
+            meand2[4 * 5 + 4] =
+                sigma * (-2.0 + 2.0 * g0 + 2.0 * xi * g1 + xi * xi * g2) / (xi * xi * xi);
+        }
+        (ml_mean, meand1, meand2)
+    }
+}
+
 // --- genpareto (GPD) --------------------------------------------------------
 
 impl DmgsModel for GenPareto {
@@ -1049,35 +1157,46 @@ impl DmgsModel for Weibull {
     }
 
     /// Analytic density first derivatives (reference `weibull_fd`).
+    ///
+    /// Phase 5 (Issue 5): all powers of `e1 = x/v2` are derived from a single
+    /// `ln_e1` via `exp(k · ln_e1)`, cutting the `powf` round-off.
     fn density_first_derivs(&self, params: &[f64], x: f64) -> Vec<f64> {
         let v1 = params[0];
         let v2 = params[1];
         let e1 = x / v2;
+        let ln_e1 = e1.ln();
         let e2 = v1 - 1.0;
-        let e3 = e1.powf(e2);
-        let e5 = (-e1.powf(v1)).exp();
+        let e3 = (e2 * ln_e1).exp();
+        let e5 = (-(v1 * ln_e1).exp()).exp();
         vec![
-            (e3 + v1 * (e3 - e1.powf(2.0 * v1 - 1.0)) * (x.ln() - v2.ln())) * e5 / v2,
-            v1 * e5 * (x * (v1 * e1.powf(2.0 * e2) - e2 * e1.powf(v1 - 2.0)) / v2 - e3) / (v2 * v2),
+            (e3 + v1 * (e3 - ((2.0 * v1 - 1.0) * ln_e1).exp()) * (x.ln() - v2.ln())) * e5 / v2,
+            v1 * e5
+                * (x * (v1 * ((2.0 * e2) * ln_e1).exp() - e2 * ((v1 - 2.0) * ln_e1).exp()) / v2
+                    - e3)
+                / (v2 * v2),
         ]
     }
 
     /// Analytic density second derivatives (reference `weibull_fdd`).
+    ///
+    /// Phase 5 (Issue 5): all powers of `e1 = x/v2` are derived from a single
+    /// `ln_e1` via `exp(k · ln_e1)`, cutting the `powf` round-off.
     fn density_second_derivs(&self, params: &[f64], x: f64) -> Vec<f64> {
         let v1 = params[0];
         let v2 = params[1];
         let e1 = x / v2;
+        let ln_e1 = e1.ln();
         let e2 = v1 - 1.0;
-        let e3 = e1.powf(e2);
+        let e3 = (e2 * ln_e1).exp();
         let e6 = x.ln() - v2.ln();
         let e7 = v1 - 2.0;
-        let e8 = e1.powf(e7);
+        let e8 = (e7 * ln_e1).exp();
         let e9 = 2.0 * v1;
         let e10 = 2.0 * e2;
         let e11 = e9 - 1.0;
-        let e12 = e1.powf(e10);
-        let e13 = e1.powf(e11);
-        let e14 = e1.powf(v1);
+        let e12 = (e10 * ln_e1).exp();
+        let e13 = (e11 * ln_e1).exp();
+        let e14 = (v1 * ln_e1).exp();
         let e15 = e2 * e8;
         let e17 = (-e14).exp();
         let e18 = v1 * e12;
@@ -1092,14 +1211,17 @@ impl DmgsModel for Weibull {
             / e25;
         let d21 = e17
             * (v1
-                * (e13 + x * ((e11 * e1.powf(e9 - 2.0) - e15) * e6 + e24 * e3) / v2
+                * (e13
+                    + x * ((e11 * ((e9 - 2.0) * ln_e1).exp() - e15) * e6 + e24 * e3) / v2
                     - (e19 * e6 + e3))
                 - (e3 + x * e2 * e8 / v2))
             / e25;
         let d22 = v1
             * e17
             * (x * ((2.0 * e8
-                + x * (e7 * e1.powf(v1 - 3.0) - 2.0 * (v1 * e1.powf(e10 - 1.0))) / v2)
+                + x * (e7 * ((v1 - 3.0) * ln_e1).exp()
+                    - 2.0 * (v1 * ((e10 - 1.0) * ln_e1).exp()))
+                    / v2)
                 * e2
                 + v1 * (e23 * e3 - e12))
                 / v2
@@ -1109,37 +1231,47 @@ impl DmgsModel for Weibull {
     }
 
     /// Analytic CDF first derivatives (reference `weibull_pd`).
+    ///
+    /// Phase 5 (Issue 5): powers of `e1 = x/v2` are derived from a single
+    /// `ln_e1` via `exp(k · ln_e1)`, cutting the `powf` round-off.
     fn cdf_first_derivs(&self, params: &[f64], x: f64) -> Vec<f64> {
         let v1 = params[0];
         let v2 = params[1];
         let e1 = x / v2;
-        let e2 = e1.powf(v1);
+        let ln_e1 = e1.ln();
+        let e2 = (v1 * ln_e1).exp();
         let e4 = (-e2).exp();
         vec![
             e4 * (x.ln() - v2.ln()) * e2,
-            -(v1 * x * e4 * e1.powf(v1 - 1.0) / (v2 * v2)),
+            -(v1 * x * e4 * ((v1 - 1.0) * ln_e1).exp() / (v2 * v2)),
         ]
     }
 
     /// Analytic CDF second derivatives (reference `weibull_pdd`).
+    ///
+    /// Phase 5 (Issue 5): powers of `e1 = x/v2` are derived from a single
+    /// `ln_e1` via `exp(k · ln_e1)`, cutting the `powf` round-off.
     fn cdf_second_derivs(&self, params: &[f64], x: f64) -> Vec<f64> {
         let v1 = params[0];
         let v2 = params[1];
         let e1 = x / v2;
-        let e2 = e1.powf(v1);
+        let ln_e1 = e1.ln();
+        let e2 = (v1 * ln_e1).exp();
         let e3 = v1 - 1.0;
-        let e4 = e1.powf(e3);
+        let e4 = (e3 * ln_e1).exp();
         let e7 = x.ln() - v2.ln();
         let e9 = (-e2).exp();
         let e10 = v1 * x;
         let e11 = v1 * e7;
         let e14 = e10 * e7 * e4 / v2;
-        let d11 = (e2 - e1.powf(2.0 * v1)) * e9 * e7 * e7;
+        let d11 = (e2 - ((2.0 * v1) * ln_e1).exp()) * e9 * e7 * e7;
         let d12 = -(x * ((1.0 - e11 * e2) * e4 + e11 * e4) * e9 / (v2 * v2));
         let d21 = ((e14 - 1.0) * e2 - e14) * e9 / v2;
-        let d22 =
-            -(e10 * e9 * (x * (v1 * e1.powf(2.0 * e3) - e3 * e1.powf(v1 - 2.0)) / v2 - 2.0 * e4)
-                / (v2 * v2 * v2));
+        let d22 = -(e10
+            * e9
+            * (x * (v1 * ((2.0 * e3) * ln_e1).exp() - e3 * ((v1 - 2.0) * ln_e1).exp()) / v2
+                - 2.0 * e4)
+            / (v2 * v2 * v2));
         vec![d11, d12, d21, d22]
     }
 
@@ -1258,6 +1390,59 @@ impl DmgsModel for Gamma {
         meand2[1] = d01;
         meand2[2] = d01;
         meand2[3] = 2.0 * shape / r3;
+        (ml_mean, meand1, meand2)
+    }
+}
+
+// --- gamma (reference (shape, scale) parameterization) ----------------------
+
+impl DmgsModel for GammaScale {
+    fn pdf(&self, x: f64, params: &[f64]) -> f64 {
+        GammaScale::pdf(self, x, params[0], params[1])
+    }
+    fn cdf(&self, x: f64, params: &[f64]) -> f64 {
+        GammaScale::cdf(self, x, params[0], params[1])
+    }
+    fn quantile(&self, p: f64, params: &[f64]) -> f64 {
+        GammaScale::quantile(self, p, params[0], params[1])
+    }
+    fn log_prior_slope(&self, params: &[f64]) -> Vec<f64> {
+        // The reference gamma uses the NON-homogeneous ad-hoc "type 1" prior
+        // `lambdad_cp = c(-1/shape, -1/scale)` (the default in `qgamma_cp`).
+        // In the `(shape, scale)` parameterization this is exactly
+        // `[-1/shape, -1/scale]`.
+        vec![-1.0 / params[0], -1.0 / params[1]]
+    }
+
+    /// Analytic density first derivatives (reference `gamma_fd`).
+    ///
+    /// Returns `[∂f/∂shape, ∂f/∂scale]` in the `(shape, scale)` parameterization.
+    fn density_first_derivs(&self, params: &[f64], x: f64) -> Vec<f64> {
+        let (d_shape, d_scale) = gamma_density_first_scale(x, params[0], params[1]);
+        vec![d_shape, d_scale]
+    }
+
+    /// Analytic density second derivatives (reference `gamma_fdd`).
+    ///
+    /// Returns the row-major `2 × 2` `[∂²f/∂shape², ∂²f/∂shape∂scale;
+    /// ∂²f/∂scale∂shape, ∂²f/∂scale²]`.
+    fn density_second_derivs(&self, params: &[f64], x: f64) -> Vec<f64> {
+        let (d_ss, d_sl, d_ll) = gamma_density_second_scale(x, params[0], params[1]);
+        vec![d_ss, d_sl, d_sl, d_ll]
+    }
+
+    /// Analytic mean derivatives (reference `gamma_libs.py::gamma_means`).
+    ///
+    /// In `(shape, scale)`: `ml_mean = shape·scale`, `∂/∂shape = scale`,
+    /// `∂/∂scale = shape`, `∂²/∂shape∂scale = 1`, all other second derivatives 0.
+    fn mean_derivs(&self, params: &[f64]) -> (f64, Vec<f64>, Vec<f64>) {
+        let shape = params[0];
+        let scale = params[1];
+        let ml_mean = shape * scale;
+        let meand1 = vec![scale, shape];
+        let mut meand2 = vec![0.0; 4];
+        meand2[1] = 1.0;
+        meand2[2] = 1.0;
         (ml_mean, meand1, meand2)
     }
 }

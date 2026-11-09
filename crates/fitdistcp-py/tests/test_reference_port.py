@@ -6,8 +6,8 @@ binding's test suite:
 * ``tools/fitdistcp-py-ref/fitdistcp/test.py`` — exercises ``ppf``/``rvs``/
   ``pdf``/``cdf`` for all models. The reference uses *flat* imports
   (``import norm as cp_norm``); here we use the NEW submodule API
-  (``import rusty_fitdistcp.norm as cp_norm``). ``genextreme_p12`` is OMITTED
-  (deferred — see the Phase B scope decisions).
+  (``import rusty_fitdistcp.norm as cp_norm``). ``genextreme_p12`` is included
+  (Phase 6, Issue 6).
 * ``tools/fitdistcp-py-ref/fitdistcp/test_example_data.py`` — the fixed example
   data vectors (ported verbatim into :mod:`reference_data`).
 * ``tools/fitdistcp-py-ref/fitdistcp/test_reltest.py`` — the reliability test,
@@ -31,6 +31,7 @@ import rusty_fitdistcp.expon
 import rusty_fitdistcp.gamma
 import rusty_fitdistcp.genextreme
 import rusty_fitdistcp.genextreme_p1
+import rusty_fitdistcp.genextreme_p12
 import rusty_fitdistcp.genpareto
 import rusty_fitdistcp.gumbel
 import rusty_fitdistcp.lnorm
@@ -74,12 +75,12 @@ def _assert_keys(res, keys):
 
 
 # ---------------------------------------------------------------------------
-# Ported `test.py::ppf()` — one entry per model (genextreme_p12 omitted).
+# Ported `test.py::ppf()` — one entry per model.
 # ---------------------------------------------------------------------------
 
 
 def test_reference_ppf_all_models():
-    """Port of the reference ``test.py::ppf()`` (genextreme_p12 omitted)."""
+    """Port of the reference ``test.py::ppf()``."""
     q = [
         rusty_fitdistcp.norm.ppf(
             data.norm[1], logscores=True, unbiasedv=True, waicscores=True
@@ -102,6 +103,9 @@ def test_reference_ppf_all_models():
             data.gev_p1[0], data.gev_p1_t[0], t0=21, means=True, waicscores=True
         ),
         rusty_fitdistcp.genpareto.ppf(data.gpd[0], means=True, waicscores=True),
+        rusty_fitdistcp.genextreme_p12.ppf(
+            data.gev_p12[0], data.gev_p12_t1[0], data.gev_p12_t2[0], t01=0, t02=0
+        ),
     ]
     for res in q:
         _assert_keys(res, PPF_KEYS)
@@ -113,6 +117,36 @@ def test_reference_ppf_all_models():
         assert res["ru_quantiles"] == "ru not selected"
 
 
+def test_reference_ppf_genextreme_p12_keys_and_finite():
+    """Phase 6 (Issue 6): the ported ``genextreme_p12.ppf`` entry.
+
+    Asserts the reference return-dict keys (including the two-predictor extras
+    ``predictedparameter``/``adjustedx``/``revert2ml``/``ml_max``) and that the
+    5-parameter fit and its MLE/CP quantiles/densities are finite.
+    """
+    res = rusty_fitdistcp.genextreme_p12.ppf(
+        data.gev_p12[0], data.gev_p12_t1[0], data.gev_p12_t2[0], t01=0, t02=0
+    )
+    _assert_keys(res, PPF_KEYS)
+    for k in ("predictedparameter", "adjustedx", "revert2ml", "ml_max", "ml_pdf", "cp_pdf"):
+        assert k in res, f"missing genextreme_p12 key: {k}"
+    assert np.asarray(res["ml_params"]).shape == (5,)
+    assert np.all(np.isfinite(res["ml_params"]))
+    assert np.all(np.isfinite(res["ml_quantiles"]))
+    assert np.all(np.isfinite(res["cp_quantiles"]))
+    assert np.all(np.isfinite(res["ml_pdf"]))
+    assert np.all(np.isfinite(res["cp_pdf"]))
+    assert np.all(np.isfinite(res["predictedparameter"]))
+    # `adjustedx` is the generalized residual `qgev(pgev(x_i; loc_i, sigma_i, xi);
+    # loc0, sigma0, xi)`. As in the reference, when the fitted shape is negative
+    # and an observation lies beyond the support, `pgev` saturates at 1 and
+    # `qgev(1)` is `+inf`, so `adjustedx` may contain `±inf`. We assert the key,
+    # its length, and that the finite entries are finite (the reference
+    # behaviour), not that every entry is finite.
+    assert np.asarray(res["adjustedx"]).shape == np.asarray(res["predictedparameter"]).shape
+    assert np.isfinite(res["adjustedx"]).any()
+
+
 def test_reference_ppf_norm_uv_extras():
     """The reference ``norm.ppf`` adds ``uv_params``/``uv_quantiles``."""
     res = rusty_fitdistcp.norm.ppf(data.norm[1], unbiasedv=True)
@@ -121,12 +155,12 @@ def test_reference_ppf_norm_uv_extras():
 
 
 # ---------------------------------------------------------------------------
-# Ported `test.py::rvs()` — one entry per model (genextreme_p12 omitted).
+# Ported `test.py::rvs()` — one entry per model.
 # ---------------------------------------------------------------------------
 
 
 def test_reference_rvs_all_models():
-    """Port of the reference ``test.py::rvs()`` (genextreme_p12 omitted)."""
+    """Port of the reference ``test.py::rvs()``."""
     y = [
         rusty_fitdistcp.norm.rvs(1, data.norm[0]),
         rusty_fitdistcp.lnorm.rvs(1, data.lnorm[0]),
@@ -137,6 +171,9 @@ def test_reference_rvs_all_models():
         rusty_fitdistcp.genextreme.rvs(1, data.gev[0]),
         rusty_fitdistcp.genextreme_p1.rvs(1, data.gev_p1[0], data.gev_p1_t[0], t0=21),
         rusty_fitdistcp.genpareto.rvs(1, data.gpd[0]),
+        rusty_fitdistcp.genextreme_p12.rvs(
+            1, data.gev_p12[0], data.gev_p12_t1[0], data.gev_p12_t2[0], t01=0, t02=0
+        ),
     ]
     for res in y:
         _assert_keys(res, RVS_KEYS)
@@ -148,12 +185,12 @@ def test_reference_rvs_all_models():
 
 
 # ---------------------------------------------------------------------------
-# Ported `test.py::pdf()` — one entry per model (genextreme_p12 omitted).
+# Ported `test.py::pdf()` — one entry per model.
 # ---------------------------------------------------------------------------
 
 
 def test_reference_pdf_all_models():
-    """Port of the reference ``test.py::pdf()`` (genextreme_p12 omitted).
+    """Port of the reference ``test.py::pdf()``.
 
     The reference script evaluates every model's density at the same ``y`` point
     it uses in ``test.py`` (``y=[0]`` for norm/lnorm/gamma, ``y=[1]`` otherwise).
@@ -178,26 +215,42 @@ def test_reference_pdf_all_models():
             ),
         ),
         ("genpareto", rusty_fitdistcp.genpareto.pdf(data.gpd[0], y=[1])),
+        (
+            "genextreme_p12",
+            rusty_fitdistcp.genextreme_p12.pdf(
+                data.gev_p12[0], data.gev_p12_t1[0], data.gev_p12_t2[0], t01=0, t02=0
+            ),
+        ),
     ]
     # The positive-support models are evaluated at the support boundary (y=0) by
     # the reference script; their density is not finite there.
     boundary_models = {"lnorm", "gamma"}
+    # `genextreme_p12.pdf` is called without `y`, so the reference evaluates the
+    # density at all `x` (length 20), not at a single point. Its `cp_pdf` is the
+    # non-reference CP density derived from the CP quantiles at the `p` grid
+    # (default `p = [0.5]`, length 1) — the same documented limitation as
+    # `genextreme_p1` (the reference `dgev_p12_cp` emits no `cp_pdf`).
+    multi_point_models = {"genextreme_p12"}
     for name, res in d:
         _assert_keys(res, PDF_KEYS)
-        assert np.asarray(res["ml_pdf"]).shape == (1,)
-        assert np.asarray(res["cp_pdf"]).shape == (1,)
+        expected_len = 20 if name in multi_point_models else 1
+        assert np.asarray(res["ml_pdf"]).shape == (expected_len,)
+        if name in multi_point_models:
+            assert np.asarray(res["cp_pdf"]).shape == (1,)
+        else:
+            assert np.asarray(res["cp_pdf"]).shape == (expected_len,)
         if name not in boundary_models:
             assert np.all(np.isfinite(res["ml_pdf"]))
         assert res["ru_pdf"] == "ru not selected"
 
 
 # ---------------------------------------------------------------------------
-# Ported `test.py::cdf()` — one entry per model (genextreme_p12 omitted).
+# Ported `test.py::cdf()` — one entry per model.
 # ---------------------------------------------------------------------------
 
 
 def test_reference_cdf_all_models():
-    """Port of the reference ``test.py::cdf()`` (genextreme_p12 omitted)."""
+    """Port of the reference ``test.py::cdf()``."""
     q = [
         rusty_fitdistcp.norm.cdf(data.norm[0]),
         rusty_fitdistcp.lnorm.cdf(data.lnorm[0]),
@@ -208,6 +261,9 @@ def test_reference_cdf_all_models():
         rusty_fitdistcp.genextreme.cdf(data.gev[0]),
         rusty_fitdistcp.genextreme_p1.cdf(data.gev_p1[0], data.gev_p1_t[0], t0=21),
         rusty_fitdistcp.genpareto.cdf(data.gpd[0]),
+        rusty_fitdistcp.genextreme_p12.cdf(
+            data.gev_p12[0], data.gev_p12_t1[0], data.gev_p12_t2[0], t01=0, t02=0
+        ),
     ]
     for res in q:
         _assert_keys(res, CDF_KEYS)

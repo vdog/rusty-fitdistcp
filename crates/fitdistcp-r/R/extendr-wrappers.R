@@ -146,6 +146,36 @@ rgev_p1_cp <- function(n, x, t, t0, n0) .Call(wrap__rgev_p1_cp, n, x, t, t0, n0)
 #' @inheritParams fitdistcp_params
 tgev_p1_cp <- function(n, x, t, t0, n0) .Call(wrap__tgev_p1_cp, n, x, t, t0, n0)
 
+#' GEV-with-two-predictors CP quantiles (reference `qgev_p12_cp`).
+#' @inheritParams fitdistcp_params
+#' @export
+#' @inheritParams fitdistcp_params
+qgev_p12_cp <- function(x, t1, t2, t01, t02, n01, n02, p) .Call(wrap__qgev_p12_cp, x, t1, t2, t01, t02, n01, n02, p)
+
+#' GEV-with-two-predictors CP densities (reference `dgev_p12_cp`).
+#' @inheritParams fitdistcp_params
+#' @export
+#' @inheritParams fitdistcp_params
+dgev_p12_cp <- function(x, t1, t2, t01, t02, n01, n02, y) .Call(wrap__dgev_p12_cp, x, t1, t2, t01, t02, n01, n02, y)
+
+#' GEV-with-two-predictors CP CDFs (reference `pgev_p12_cp`).
+#' @inheritParams fitdistcp_params
+#' @export
+#' @inheritParams fitdistcp_params
+pgev_p12_cp <- function(x, t1, t2, t01, t02, n01, n02, y) .Call(wrap__pgev_p12_cp, x, t1, t2, t01, t02, n01, n02, y)
+
+#' GEV-with-two-predictors CP random deviates (reference `rgev_p12_cp`).
+#' @inheritParams fitdistcp_params
+#' @export
+#' @inheritParams fitdistcp_params
+rgev_p12_cp <- function(n, x, t1, t2, t01, t02, n01, n02) .Call(wrap__rgev_p12_cp, n, x, t1, t2, t01, t02, n01, n02)
+
+#' GEV-with-two-predictors posterior theta samples (reference `tgev_p12_cp`; RUST — Phase 2).
+#' @inheritParams fitdistcp_params
+#' @export
+#' @inheritParams fitdistcp_params
+tgev_p12_cp <- function(n, x, t1, t2, t01, t02, n01, n02) .Call(wrap__tgev_p12_cp, n, x, t1, t2, t01, t02, n01, n02)
+
 #' GPD CP quantiles (reference `qgpd_k1_cp`).
 #' @inheritParams fitdistcp_params
 #' @export

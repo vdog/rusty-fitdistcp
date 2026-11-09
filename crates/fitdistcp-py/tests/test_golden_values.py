@@ -96,6 +96,11 @@ GOLDEN = {
         "dmgs_quantiles": [8.3020322942156515, 9.1676947492662979,
                            10.110666666666667, 11.053638584067036,
                            11.919301039117684],
+        # Phase 1 (Issue 1): the reference's exact analytic CP quantiles
+        # (qnorm_cp). The binding now returns these, not the DMGS values.
+        "cp_quantiles": [8.2974693556599561, 9.1662854589023581,
+                         10.110666666666667, 11.055047874430976,
+                         11.923863977673379],
         "closed_form": True,
     },
     "expon": {
@@ -114,6 +119,11 @@ GOLDEN = {
         "dmgs_quantiles": [0.17369275992582978, 0.47569874685724578,
                            1.1538669686398952, 2.3340894542766142,
                            3.9347068178784892],
+        # Phase 1 (Issue 1): the reference's exact analytic CP quantiles
+        # (qexp_cp). The binding now returns these, not the DMGS values.
+        "cp_quantiles": [0.1736931166751792, 0.47570602010555169,
+                         1.1539690478807805, 2.3349108436543413,
+                         3.9384997641190251],
         "closed_form": True,
     },
     "lnorm": {
@@ -132,6 +142,11 @@ GOLDEN = {
         "dmgs_quantiles": [0.44798159303093454, 0.73451658677891085,
                            1.2573478878211535, 2.1511575900974833,
                            3.5186832730471793],
+        # Phase 1 (Issue 1): the reference's exact analytic CP quantiles
+        # (qlnorm_cp). The binding now returns these, not the DMGS values.
+        "cp_quantiles": [0.44749612160612895, 0.73413050653305711,
+                         1.2573478878211535, 2.1534641278895399,
+                         3.532821033921254],
         "closed_form": True,
     },
     "gumbel": {
@@ -265,9 +280,18 @@ def test_golden_dmgs_cp_quantiles(model):
     g = GOLDEN[model]
     mod = _MODULES[model]
     res = mod.ppf(g["y"], P_GRID)
-    np.testing.assert_allclose(
-        res["cp_quantiles"], g["dmgs_quantiles"], rtol=DMGS_RTOL, atol=DMGS_ATOL
-    )
+    if "cp_quantiles" in g:
+        # Phase 1 (Issue 1): the analytic models (norm/expon/lnorm) now return
+        # the reference's exact analytic CP quantiles, so compare against the
+        # analytic golden values at the baseline §7.2 tolerance.
+        np.testing.assert_allclose(
+            res["cp_quantiles"], g["cp_quantiles"], rtol=RTOL, atol=ATOL
+        )
+    else:
+        # The DMGS models (gumbel/weibull) still use the DMGS expansion.
+        np.testing.assert_allclose(
+            res["cp_quantiles"], g["dmgs_quantiles"], rtol=DMGS_RTOL, atol=DMGS_ATOL
+        )
 
 
 @pytest.mark.parametrize(

@@ -156,6 +156,164 @@ impl Gamma {
     }
 }
 
+/// The gamma distribution model in the **reference `(shape, scale)`
+/// parameterization** (Phase 5, Issue 5).
+///
+/// The reference `fitdistcp` gamma module (`100a_gamma.R` / `100c_gamma_derivs.R`)
+/// parameterizes by `(shape, scale)` with `scale = 1/rate`, and computes the DMGS
+/// expansion in that parameterization. The DMGS first-order truncation is **not
+/// invariant under nonlinear reparameterization**, so computing the expansion in
+/// `(shape, rate)` (as the core [`Gamma`] model does) diverges from the reference
+/// by ~9% at `n = 30` (the documented Issue 5 root cause).
+///
+/// This wrapper presents the gamma in `(shape, scale)` so the existing
+/// [`crate::dmgs::DmgsIntegrator`] machinery computes the expansion in the
+/// reference's parameterization. It supplies the reference's analytic
+/// `(shape, scale)` derivatives (`gamma_logfdd` / `gamma_logfddd` /
+/// `gamma_fd` / `gamma_fdd` / `gamma_pd` / `gamma_pdd`), so the expansion matches
+/// the reference to the DMGS tolerance.
+///
+/// The binding still **fits** in `(shape, rate)` (the core [`Gamma`] model); it
+/// converts `scale = 1/rate` at the boundary and runs the CP expansion through
+/// this model, exactly as it already does for the density.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct GammaScale;
+
+impl GammaScale {
+    /// Create a `(shape, scale)` gamma model.
+    pub fn new() -> Self {
+        GammaScale
+    }
+
+    /// Log-density `ln f(y; shape, scale)` in the reference parameterization.
+    pub fn logpdf(&self, y: f64, shape: f64, scale: f64) -> f64 {
+        Gamma.logpdf(y, shape, 1.0 / scale)
+    }
+
+    /// Density `f(y; shape, scale)` in the reference parameterization.
+    pub fn pdf(&self, y: f64, shape: f64, scale: f64) -> f64 {
+        Gamma.pdf(y, shape, 1.0 / scale)
+    }
+
+    /// CDF `F(y; shape, scale)` in the reference parameterization.
+    pub fn cdf(&self, y: f64, shape: f64, scale: f64) -> f64 {
+        Gamma.cdf(y, shape, 1.0 / scale)
+    }
+
+    /// Quantile `F^{-1}(p; shape, scale)` in the reference parameterization.
+    pub fn quantile(&self, p: f64, shape: f64, scale: f64) -> f64 {
+        Gamma.quantile(p, shape, 1.0 / scale)
+    }
+}
+
+impl Derivatives for GammaScale {
+    fn loglik(&self, params: &[f64], y: &[f64]) -> f64 {
+        let shape = params[0];
+        let scale = params[1];
+        // Guard the valid region (mirrors the core `Gamma` guard): the reference
+        // `gamma_loglik` uses R's `dgamma`, which is `NaN`/`-Inf` outside
+        // `shape > 0, scale > 0`.
+        if !(shape.is_finite() && shape > 0.0 && scale.is_finite() && scale > 0.0) {
+            return f64::NEG_INFINITY;
+        }
+        crate::models::par_sum(y, |yi| self.logpdf(yi, shape, scale))
+    }
+
+    fn n_params(&self) -> usize {
+        2
+    }
+
+    /// `setics`-style initial conditions in `(shape, scale)`.
+    ///
+    /// Method-of-moments: `shape = (mean/sd)^2`, `scale = sd^2/mean`.
+    fn setics(&self, y: &[f64], init: &[f64]) -> Vec<f64> {
+        let mean = crate::models::sample_mean(y);
+        let sd = crate::models::sample_std_ddof1(y);
+        if mean > 0.0 && sd > 0.0 {
+            let shape = (mean / sd).powi(2);
+            let scale = (sd * sd) / mean;
+            vec![shape, scale]
+        } else {
+            init.to_vec()
+        }
+    }
+
+    /// Analytic score in `(shape, scale)` (reference `gamma_logfdd` summed).
+    ///
+    /// With `ln f = (shape-1)·ln y - y/scale - shape·ln(scale) - lnΓ(shape)`:
+    /// `∂ℓ/∂shape = Σ ln y - n ln(scale) - n ψ(shape)`,
+    /// `∂ℓ/∂scale = Σ y/scale² - n shape/scale`.
+    fn score(&self, params: &[f64], y: &[f64]) -> Vec<f64> {
+        let shape = params[0];
+        let scale = params[1];
+        let n = y.len() as f64;
+        let (s, l) = crate::models::par_reduce2(y, |yi| (yi, yi.ln()));
+        vec![
+            l - n * scale.ln() - n * digamma(shape),
+            s / (scale * scale) - n * shape / scale,
+        ]
+    }
+
+    /// Analytic Hessian in `(shape, scale)` (reference `gamma_logfdd` summed).
+    ///
+    /// `∂²ℓ/∂shape² = -n ψ₁(shape)`, `∂²ℓ/∂shape∂scale = -n/scale`,
+    /// `∂²ℓ/∂scale² = -2 Σ y/scale³ + n shape/scale²`.
+    fn hessian(&self, params: &[f64], y: &[f64]) -> Vec<f64> {
+        let shape = params[0];
+        let scale = params[1];
+        let n = y.len() as f64;
+        let s: f64 = y.iter().sum();
+        let s2 = scale * scale;
+        let s3 = s2 * scale;
+        vec![
+            -n * trigamma(shape),
+            -n / scale,
+            -n / scale,
+            -2.0 * s / s3 + n * shape / s2,
+        ]
+    }
+
+    /// Analytic third derivatives in `(shape, scale)` (reference
+    /// `gamma_logfddd` summed).
+    ///
+    /// Row-major `2 × 2 × 2`, index `(i, j, k)` at `i*4 + j*2 + k`:
+    /// `∂³ℓ/∂shape³ = -n ψ₂(shape)`, `∂³ℓ/∂shape²∂scale = 0`,
+    /// `∂³ℓ/∂shape∂scale² = n/scale²`,
+    /// `∂³ℓ/∂scale³ = 6 Σ y/scale⁴ - 2 n shape/scale³`.
+    fn third_derivatives(&self, params: &[f64], y: &[f64]) -> Vec<f64> {
+        let shape = params[0];
+        let scale = params[1];
+        let n = y.len() as f64;
+        let s: f64 = y.iter().sum();
+        let s2 = scale * scale;
+        let s3 = s2 * scale;
+        let s4 = s2 * s2;
+        let d111 = -n * tetragamma(shape);
+        let d112 = 0.0;
+        let d122 = n / s2;
+        let d222 = 6.0 * s / s4 - 2.0 * n * shape / s3;
+        vec![
+            d111, d112, // (0,0,0), (0,0,1)
+            d112, d122, // (0,1,0), (0,1,1)
+            d112, d122, // (1,0,0), (1,0,1)
+            d122, d222, // (1,1,0), (1,1,1)
+        ]
+    }
+
+    /// Analytic mixed derivatives `∂²ℓ/∂θ_i∂y_a` in `(shape, scale)`.
+    ///
+    /// `∂²ℓ/∂shape∂y_a = 1/y_a`, `∂²ℓ/∂scale∂y_a = 1/scale²`.
+    fn mixed_derivatives(&self, params: &[f64], y: &[f64]) -> Vec<f64> {
+        let scale = params[1];
+        let ny = y.len();
+        let mut out = vec![0.0; 2 * ny];
+        let (row0, row1) = out.split_at_mut(ny);
+        crate::models::par_fill(row0, y, |ya| 1.0 / ya);
+        crate::models::par_fill(row1, y, |_| 1.0 / (scale * scale));
+        out
+    }
+}
+
 /// Invert the regularized lower incomplete gamma `P(a, x) = p` for `x > 0`.
 ///
 /// Uses a safeguarded Newton iteration (Newton with a bisection fallback) on
@@ -266,12 +424,42 @@ impl Derivatives for Gamma {
     fn loglik(&self, params: &[f64], y: &[f64]) -> f64 {
         let shape = params[0];
         let rate = params[1];
+        // Guard the valid parameter region (Phase 3, Issue 3). The reference
+        // `gamma_loglik` uses R's `dgamma`, which returns `NaN`/`-Inf` for
+        // `shape <= 0` or `rate <= 0`. The Rust `ln_gamma` is defined for
+        // negative non-integer arguments via reflection, so without this guard a
+        // degenerate negative-shape region can carry a *finite* log-likelihood
+        // and win the multi-start selection, corrupting downstream CP quantiles
+        // (the `special` incomplete-gamma routine asserts `shape > 0`). Returning
+        // `-inf` here keeps the optimizer inside the valid region.
+        if !(shape.is_finite() && shape > 0.0 && rate.is_finite() && rate > 0.0) {
+            return f64::NEG_INFINITY;
+        }
         // W17 (H4/H6): gated parallel reduction over observations.
         crate::models::par_sum(y, |yi| self.logpdf(yi, shape, rate))
     }
 
     fn n_params(&self) -> usize {
         2
+    }
+
+    /// `setics`-style initial conditions (Phase 3, Issue 3).
+    ///
+    /// The reference seeds the gamma `optim` from `c(1, 1)`; the Rust
+    /// multi-start strategy adds a **moment-based** start: for the
+    /// `(shape, rate)` parameterization the method-of-moments estimates are
+    /// `shape = (mean/sd)^2` and `rate = mean/sd^2`. This puts the optimizer on
+    /// the data's scale instead of the unit scale.
+    fn setics(&self, y: &[f64], init: &[f64]) -> Vec<f64> {
+        let mean = crate::models::sample_mean(y);
+        let sd = crate::models::sample_std_ddof1(y);
+        if mean > 0.0 && sd > 0.0 {
+            let shape = (mean / sd).powi(2);
+            let rate = mean / (sd * sd);
+            vec![shape, rate]
+        } else {
+            init.to_vec()
+        }
     }
 
     fn score(&self, params: &[f64], y: &[f64]) -> Vec<f64> {
@@ -474,5 +662,124 @@ mod tests {
         // Reference gamma_means: ml_mean = shape * scale.
         let m = Gamma;
         assert_close(m.mean_scale(2.5, 1.3), 3.25, "mean_scale");
+    }
+
+    // --- Phase 5 (Issue 5): (shape, scale) DMGS model ------------------------
+
+    #[test]
+    fn gamma_scale_matches_rate_parameterization() {
+        // The (shape, scale) model must describe the same distribution as the
+        // (shape, rate) model with rate = 1/scale.
+        let m = GammaScale;
+        let (shape, scale) = (2.5, 1.3);
+        let rate = 1.0 / scale;
+        for &y in &[0.3_f64, 1.0, 2.5] {
+            assert_close(
+                m.logpdf(y, shape, scale),
+                Gamma.logpdf(y, shape, rate),
+                "gamma_scale logpdf",
+            );
+            assert_close(
+                m.pdf(y, shape, scale),
+                Gamma.pdf(y, shape, rate),
+                "gamma_scale pdf",
+            );
+            assert_close(
+                m.cdf(y, shape, scale),
+                Gamma.cdf(y, shape, rate),
+                "gamma_scale cdf",
+            );
+        }
+        for &p in &[0.1_f64, 0.5, 0.9] {
+            assert_close(
+                m.quantile(p, shape, scale),
+                Gamma.quantile(p, shape, rate),
+                "gamma_scale quantile",
+            );
+        }
+    }
+
+    #[test]
+    fn gamma_scale_score_matches_numerical_fallback() {
+        let m = GammaScale;
+        let y = vec![0.5, 1.2, 0.3, 2.1, 0.9, 1.7, 0.4, 1.1, 0.8, 1.5];
+        let params = [2.0, 1.3];
+        let ana = m.score(&params, &y);
+        let num = crate::models::numerical_score(
+            &|p: &[f64]| m.loglik(p, &y),
+            &params,
+            &crate::models::FiniteDiffConfig::default(),
+        );
+        for (i, (a, n)) in ana.iter().zip(num.iter()).enumerate() {
+            let tol = 1e-6 + 1e-6 * n.abs();
+            assert!((a - n).abs() <= tol, "gamma_scale score[{i}]: {a} vs {n}");
+        }
+    }
+
+    #[test]
+    fn gamma_scale_hessian_matches_numerical_fallback() {
+        let m = GammaScale;
+        let y = vec![0.5, 1.2, 0.3, 2.1, 0.9, 1.7, 0.4, 1.1, 0.8, 1.5];
+        let params = [2.0, 1.3];
+        let ana = m.hessian(&params, &y);
+        let num = crate::models::numerical_hessian(
+            &|p: &[f64]| m.loglik(p, &y),
+            &params,
+            &crate::models::FiniteDiffConfig::default(),
+        );
+        for (i, (a, n)) in ana.iter().zip(num.iter()).enumerate() {
+            let tol = 1e-5 + 1e-5 * n.abs();
+            assert!((a - n).abs() <= tol, "gamma_scale hessian[{i}]: {a} vs {n}");
+        }
+    }
+
+    #[test]
+    fn gamma_scale_third_derivatives_match_numerical_fallback() {
+        let m = GammaScale;
+        let y = vec![0.5, 1.2, 0.3, 2.1, 0.9, 1.7, 0.4, 1.1, 0.8, 1.5];
+        let params = [2.0, 1.3];
+        let ana = m.third_derivatives(&params, &y);
+        let num = crate::models::numerical_third_derivatives(
+            &|p: &[f64]| m.loglik(p, &y),
+            &params,
+            &crate::models::FiniteDiffConfig::default(),
+        );
+        for (i, (a, n)) in ana.iter().zip(num.iter()).enumerate() {
+            let tol = 1e-3 + 1e-3 * n.abs();
+            assert!((a - n).abs() <= tol, "gamma_scale third[{i}]: {a} vs {n}");
+        }
+    }
+
+    #[test]
+    fn gamma_scale_fits_synthetic_data() {
+        // The (shape, scale) model is used for the DMGS expansion, not for
+        // fitting (the binding fits with the core `Gamma` model). The meaningful
+        // check is that the optimizer reaches the same stationary point: the
+        // score vanishes at the returned parameters, and the (shape, scale)
+        // optimum matches the (shape, rate) optimum converted.
+        let m = GammaScale;
+        let y = vec![0.5, 1.2, 0.3, 2.1, 0.9, 1.7, 0.4, 1.1, 0.8, 1.5];
+        let scale_fit = fit(&m, &y, &[1.0, 1.0]);
+        let g = m.score(&scale_fit.ml_params, &y);
+        for (i, gi) in g.iter().enumerate() {
+            assert!(gi.abs() < 1e-6, "gamma_scale score[{i}] at MLE = {gi}");
+        }
+        // The (shape, rate) fit converted to (shape, scale) must agree to the
+        // optimizer tolerance (both reach the same stationary point; the
+        // (shape, scale) surface is flatter so the optimizer stops slightly
+        // earlier).
+        let rate_fit = fit(&Gamma, &y, &[1.0, 1.0]);
+        let shape_rel = (scale_fit.ml_params[0] - rate_fit.ml_params[0]).abs()
+            / rate_fit.ml_params[0].abs();
+        let scale_rel = (scale_fit.ml_params[1] - 1.0 / rate_fit.ml_params[1]).abs()
+            / (1.0 / rate_fit.ml_params[1]).abs();
+        assert!(
+            shape_rel < 1e-4,
+            "gamma_scale shape vs rate fit: rel = {shape_rel:.3e}"
+        );
+        assert!(
+            scale_rel < 1e-4,
+            "gamma_scale scale vs rate fit: rel = {scale_rel:.3e}"
+        );
     }
 }

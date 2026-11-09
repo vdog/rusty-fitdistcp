@@ -85,12 +85,12 @@
 use extendr_api::prelude::*;
 
 use fitdistcp_core::api::{
-    predict, predict_gev, predict_gev_p1, predict_norm_p1, FitResult, NormP1Result,
-    PredictionRequest,
+    predict, predict_analytic, predict_gamma, predict_gev, predict_gev_p1, predict_gev_p12,
+    predict_gpd, predict_norm_p1, AnalyticModel, FitResult, NormP1Result, PredictionRequest,
 };
 use fitdistcp_core::models::{
-    Exponential, Gamma, GenExtreme, GenExtremeP1, GenPareto, Gumbel, LogNormal, Normal, NormalP1,
-    Weibull,
+    Exponential, Gamma, GenExtreme, GenExtremeP1, GenExtremeP12, GenPareto, Gumbel, LogNormal,
+    Normal, NormalP1, Weibull,
 };
 
 // ---------------------------------------------------------------------------
@@ -259,6 +259,25 @@ fn decenter_fit(r: &FitResult, mean_t: f64) -> FitResult {
     }
     if out.cp_params.len() >= 2 {
         out.cp_params[0] -= out.cp_params[1] * mean_t;
+    }
+    out
+}
+
+/// Decenter a `genextreme_p12` [`FitResult`]'s location intercept and log-scale
+/// intercept.
+///
+/// The reference fits on the centered predictors and then decenters the reported
+/// intercepts: `a_ret = a_c - b*mean(t1)` and `sc1_ret = sc1_c - sc2*mean(t2)`.
+/// The slopes/scale/shape are unchanged.
+fn decenter_fit_p12(r: &FitResult, mean_t1: f64, mean_t2: f64) -> FitResult {
+    let mut out = r.clone();
+    if out.ml_params.len() >= 5 {
+        out.ml_params[0] -= out.ml_params[1] * mean_t1;
+        out.ml_params[2] -= out.ml_params[3] * mean_t2;
+    }
+    if out.cp_params.len() >= 5 {
+        out.cp_params[0] -= out.cp_params[1] * mean_t1;
+        out.cp_params[2] -= out.cp_params[3] * mean_t2;
     }
     out
 }
@@ -546,7 +565,7 @@ fn qnorm_cp(x: Robj, p: Robj) -> Result<List> {
     let x = real_vec(&x, "x")?;
     let p = real_vec(&p, "p")?;
     let req = make_request(x.clone(), x, p, None, None, None);
-    let r = predict(Normal, &req, &[0.0, 1.0]);
+    let r = predict_analytic(AnalyticModel::Norm, &req, &[0.0, 1.0], false);
     Ok(q_cp_list(&r, ANALYTIC_CPMETHOD, vec![]))
 }
 
@@ -556,7 +575,7 @@ fn dnorm_cp(x: Robj, y: Robj) -> Result<List> {
     let x = real_vec(&x, "x")?;
     let y = real_vec(&y, "y")?;
     let req = make_request(x, y, vec![0.5], None, None, None);
-    let r = predict(Normal, &req, &[0.0, 1.0]);
+    let r = predict_analytic(AnalyticModel::Norm, &req, &[0.0, 1.0], false);
     Ok(d_cp_list(&r, ANALYTIC_CPMETHOD, vec![]))
 }
 
@@ -566,7 +585,7 @@ fn pnorm_cp(x: Robj, y: Robj) -> Result<List> {
     let x = real_vec(&x, "x")?;
     let y = real_vec(&y, "y")?;
     let req = make_request(x, y.clone(), vec![0.5], None, None, None);
-    let r = predict(Normal, &req, &[0.0, 1.0]);
+    let r = predict_analytic(AnalyticModel::Norm, &req, &[0.0, 1.0], false);
     let ml_cdf = cdf_at(&Normal, &r.ml_params, &y);
     let cp_cdf = cdf_at(&Normal, &r.cp_params, &y);
     Ok(p_cp_list(&r, ml_cdf, cp_cdf, ANALYTIC_CPMETHOD, vec![]))
@@ -579,7 +598,7 @@ fn rnorm_cp(n: Robj, x: Robj) -> Result<List> {
     let x = real_vec(&x, "x")?;
     let p: Vec<f64> = (0..n).map(|i| (i as f64 + 0.5) / n as f64).collect();
     let req = make_request(x.clone(), x, p, None, None, None);
-    let r = predict(Normal, &req, &[0.0, 1.0]);
+    let r = predict_analytic(AnalyticModel::Norm, &req, &[0.0, 1.0], false);
     Ok(r_cp_list(&r, ANALYTIC_CPMETHOD, vec![]))
 }
 
@@ -899,6 +918,173 @@ fn tgev_p1_cp(_n: Robj, _x: Robj, _t: Robj, _t0: Robj, _n0: Robj) -> Result<List
     Ok(t_cp_list())
 }
 
+// --- GEV + two predictors (`gev_p12`) --------------------------------------
+
+/// GEV-with-two-predictors CP quantiles (reference `qgev_p12_cp`).
+///
+/// Phase 6 (Issue 6): the reference `gev_p12` CP uses the DMGS CRHP/flat path
+/// with the `revert2ml` guard and the quantile-derived CP density, exactly like
+/// `qgev_p1_cp`. The predictors are centered by their means and the prediction
+/// points are resolved via `maket0`.
+#[extendr]
+fn qgev_p12_cp(x: Robj, t1: Robj, t2: Robj, t01: Robj, t02: Robj, n01: Robj, n02: Robj, p: Robj) -> Result<List> {
+    let x = real_vec(&x, "x")?;
+    let t1 = opt_real_vec(&t1, "t1")?;
+    let t2 = opt_real_vec(&t2, "t2")?;
+    let t01 = opt_scalar(&t01, "t01")?;
+    let t02 = opt_scalar(&t02, "t02")?;
+    let n01 = opt_scalar(&n01, "n01")?;
+    let n02 = opt_scalar(&n02, "n02")?;
+    let p = real_vec(&p, "p")?;
+    let t1 = t1.unwrap_or_default();
+    let t2 = t2.unwrap_or_default();
+    let t01 = maket0(&t1, t01, n01);
+    let t02 = maket0(&t2, t02, n02);
+    let model = GenExtremeP12::new(t1, t2, t01, t02, n01.unwrap_or(1.0), n02.unwrap_or(1.0));
+    let mean_t1 = model.mean_t1();
+    let mean_t2 = model.mean_t2();
+    let req = make_request(x.clone(), x, p, None, None, None);
+    let r = decenter_fit_p12(
+        &predict_gev_p12(&model, &req, &[0.0, 0.0, 0.0, 0.0, 0.0], 0.01),
+        mean_t1,
+        mean_t2,
+    );
+    let shape = r.ml_params.get(4).copied().unwrap_or(0.0);
+    let revert2ml = model.revert2ml(shape);
+    let loc0 = model.location_prediction(r.ml_params[0], r.ml_params[1]);
+    let sigma0 = model.scale_prediction(r.ml_params[2], r.ml_params[3]);
+    let ml_max = model.ml_max(loc0, sigma0, shape);
+    Ok(q_cp_list(
+        &r,
+        CRHPFLAT_DMGS_CPMETHOD,
+        vec![
+            ("ml_max", ml_max.into()),
+            ("revert2ml", revert2ml.into()),
+            ("ml_pdf", doubles(r.ml_pdf.clone()).into()),
+            ("cp_pdf", doubles(r.cp_pdf.clone()).into()),
+            ("pw_params", PWM_NOT_SELECTED.into()),
+            ("pw_quantiles", PWM_NOT_SELECTED.into()),
+            ("custom_quantiles", EXTRAMODELS_NOT_SELECTED.into()),
+            ("custom_mean", f64::NAN.into()),
+            ("bs_quantiles", BOOT_NOT_SELECTED.into()),
+        ],
+    ))
+}
+
+/// GEV-with-two-predictors CP densities (reference `dgev_p12_cp`).
+#[extendr]
+fn dgev_p12_cp(x: Robj, t1: Robj, t2: Robj, t01: Robj, t02: Robj, n01: Robj, n02: Robj, y: Robj) -> Result<List> {
+    let x = real_vec(&x, "x")?;
+    let t1 = opt_real_vec(&t1, "t1")?;
+    let t2 = opt_real_vec(&t2, "t2")?;
+    let t01 = opt_scalar(&t01, "t01")?;
+    let t02 = opt_scalar(&t02, "t02")?;
+    let n01 = opt_scalar(&n01, "n01")?;
+    let n02 = opt_scalar(&n02, "n02")?;
+    let y = real_vec(&y, "y")?;
+    let t1 = t1.unwrap_or_default();
+    let t2 = t2.unwrap_or_default();
+    let t01 = maket0(&t1, t01, n01);
+    let t02 = maket0(&t2, t02, n02);
+    let model = GenExtremeP12::new(t1, t2, t01, t02, n01.unwrap_or(1.0), n02.unwrap_or(1.0));
+    let mean_t1 = model.mean_t1();
+    let mean_t2 = model.mean_t2();
+    let req = make_request(y, x, vec![0.5], None, None, None);
+    let r = decenter_fit_p12(
+        &predict_gev_p12(&model, &req, &[0.0, 0.0, 0.0, 0.0, 0.0], 0.01),
+        mean_t1,
+        mean_t2,
+    );
+    let shape = r.ml_params.get(4).copied().unwrap_or(0.0);
+    let revert2ml = model.revert2ml(shape);
+    Ok(d_cp_list(
+        &r,
+        CRHPFLAT_DMGS_CPMETHOD,
+        vec![
+            ("revert2ml", revert2ml.into()),
+            ("bs_pdf", BOOT_NOT_SELECTED.into()),
+        ],
+    ))
+}
+
+/// GEV-with-two-predictors CP CDFs (reference `pgev_p12_cp`).
+#[extendr]
+fn pgev_p12_cp(x: Robj, t1: Robj, t2: Robj, t01: Robj, t02: Robj, n01: Robj, n02: Robj, y: Robj) -> Result<List> {
+    let x = real_vec(&x, "x")?;
+    let t1 = opt_real_vec(&t1, "t1")?;
+    let t2 = opt_real_vec(&t2, "t2")?;
+    let t01 = opt_scalar(&t01, "t01")?;
+    let t02 = opt_scalar(&t02, "t02")?;
+    let n01 = opt_scalar(&n01, "n01")?;
+    let n02 = opt_scalar(&n02, "n02")?;
+    let y = real_vec(&y, "y")?;
+    let t1 = t1.unwrap_or_default();
+    let t2 = t2.unwrap_or_default();
+    let t01 = maket0(&t1, t01, n01);
+    let t02 = maket0(&t2, t02, n02);
+    let model = GenExtremeP12::new(t1, t2, t01, t02, n01.unwrap_or(1.0), n02.unwrap_or(1.0));
+    let mean_t1 = model.mean_t1();
+    let mean_t2 = model.mean_t2();
+    let req = make_request(y.clone(), x, vec![0.5], None, None, None);
+    let r = decenter_fit_p12(
+        &predict_gev_p12(&model, &req, &[0.0, 0.0, 0.0, 0.0, 0.0], 0.01),
+        mean_t1,
+        mean_t2,
+    );
+    let shape = r.ml_params.get(4).copied().unwrap_or(0.0);
+    let revert2ml = model.revert2ml(shape);
+    let ml_cdf = cdf_at(&model, &r.ml_params, &y);
+    let cp_cdf = cdf_at(&model, &r.cp_params, &y);
+    Ok(p_cp_list(
+        &r,
+        ml_cdf,
+        cp_cdf,
+        CRHPFLAT_DMGS_CPMETHOD,
+        vec![
+            ("revert2ml", revert2ml.into()),
+            ("bs_cdf", BOOT_NOT_SELECTED.into()),
+        ],
+    ))
+}
+
+/// GEV-with-two-predictors CP random deviates (reference `rgev_p12_cp`).
+#[extendr]
+fn rgev_p12_cp(n: Robj, x: Robj, t1: Robj, t2: Robj, t01: Robj, t02: Robj, n01: Robj, n02: Robj) -> Result<List> {
+    let n = opt_scalar(&n, "n")?.unwrap_or(1.0).max(1.0) as usize;
+    let x = real_vec(&x, "x")?;
+    let t1 = opt_real_vec(&t1, "t1")?;
+    let t2 = opt_real_vec(&t2, "t2")?;
+    let t01 = opt_scalar(&t01, "t01")?;
+    let t02 = opt_scalar(&t02, "t02")?;
+    let n01 = opt_scalar(&n01, "n01")?;
+    let n02 = opt_scalar(&n02, "n02")?;
+    let t1 = t1.unwrap_or_default();
+    let t2 = t2.unwrap_or_default();
+    let t01 = maket0(&t1, t01, n01);
+    let t02 = maket0(&t2, t02, n02);
+    let model = GenExtremeP12::new(t1, t2, t01, t02, n01.unwrap_or(1.0), n02.unwrap_or(1.0));
+    let mean_t1 = model.mean_t1();
+    let mean_t2 = model.mean_t2();
+    let p: Vec<f64> = (0..n).map(|i| (i as f64 + 0.5) / n as f64).collect();
+    let req = make_request(x.clone(), x, p, None, None, None);
+    let r = decenter_fit_p12(
+        &predict_gev_p12(&model, &req, &[0.0, 0.0, 0.0, 0.0, 0.0], 0.01),
+        mean_t1,
+        mean_t2,
+    );
+    Ok(r_cp_list(
+        &r,
+        CRHPFLAT_DMGS_CPMETHOD,
+        vec![("bs_deviates", BOOT_NOT_SELECTED.into())],
+    ))
+}
+
+/// GEV-with-two-predictors posterior theta samples (reference `tgev_p12_cp`; RUST — Phase 2).
+#[extendr]
+fn tgev_p12_cp(_n: Robj, _x: Robj, _t1: Robj, _t2: Robj, _t01: Robj, _t02: Robj, _n01: Robj, _n02: Robj) -> Result<List> {
+    Ok(t_cp_list())
+}
+
 // --- GPD (`gpd_k1`) --------------------------------------------------------
 
 /// GPD CP quantiles (reference `qgpd_k1_cp`).
@@ -907,9 +1093,12 @@ fn qgpd_k1_cp(x: Robj, p: Robj) -> Result<List> {
     let x = real_vec(&x, "x")?;
     let p = real_vec(&p, "p")?;
     let req = make_request(x.clone(), x, p, None, None, None);
-    let r = predict(GenPareto, &req, &[1.0, 0.0]);
+    // Phase 2 (Issue 2): seed the GPD scale from `setics` (the data's own sd)
+    // instead of the hard-coded 1.0, so dollar-scale data fits without NaN.
+    let init = GenPareto.setics(&req.y, &[0.0, 0.0]);
+    let r = predict_gpd(GenPareto, &req, &init);
     let shape = r.ml_params.get(1).copied().unwrap_or(0.0);
-    let revert2ml = shape.abs() >= 1.0 || shape > 30.0;
+    let revert2ml = GenPareto.revert2ml(shape);
     Ok(q_cp_list(
         &r,
         ADHOC_DMGS_CPMETHOD,
@@ -933,7 +1122,8 @@ fn dgpd_k1_cp(x: Robj, y: Robj) -> Result<List> {
     let x = real_vec(&x, "x")?;
     let y = real_vec(&y, "y")?;
     let req = make_request(x, y, vec![0.5], None, None, None);
-    let r = predict(GenPareto, &req, &[1.0, 0.0]);
+    let init = GenPareto.setics(&req.y, &[0.0, 0.0]);
+    let r = predict_gpd(GenPareto, &req, &init);
     Ok(d_cp_list(&r, ADHOC_DMGS_CPMETHOD, vec![]))
 }
 
@@ -943,7 +1133,8 @@ fn pgpd_k1_cp(x: Robj, y: Robj) -> Result<List> {
     let x = real_vec(&x, "x")?;
     let y = real_vec(&y, "y")?;
     let req = make_request(x, y.clone(), vec![0.5], None, None, None);
-    let r = predict(GenPareto, &req, &[1.0, 0.0]);
+    let init = GenPareto.setics(&req.y, &[0.0, 0.0]);
+    let r = predict_gpd(GenPareto, &req, &init);
     let ml_cdf = cdf_at(&GenPareto, &r.ml_params, &y);
     let cp_cdf = cdf_at(&GenPareto, &r.cp_params, &y);
     Ok(p_cp_list(&r, ml_cdf, cp_cdf, ADHOC_DMGS_CPMETHOD, vec![]))
@@ -956,7 +1147,8 @@ fn rgpd_k1_cp(n: Robj, x: Robj) -> Result<List> {
     let x = real_vec(&x, "x")?;
     let p: Vec<f64> = (0..n).map(|i| (i as f64 + 0.5) / n as f64).collect();
     let req = make_request(x.clone(), x, p, None, None, None);
-    let r = predict(GenPareto, &req, &[1.0, 0.0]);
+    let init = GenPareto.setics(&req.y, &[0.0, 0.0]);
+    let r = predict_gpd(GenPareto, &req, &init);
     Ok(r_cp_list(&r, ADHOC_DMGS_CPMETHOD, vec![]))
 }
 
@@ -1025,7 +1217,7 @@ fn qlnorm_cp(x: Robj, p: Robj) -> Result<List> {
     let x = real_vec(&x, "x")?;
     let p = real_vec(&p, "p")?;
     let req = make_request(x.clone(), x, p, None, None, None);
-    let r = predict(LogNormal, &req, &[0.0, 1.0]);
+    let r = predict_analytic(AnalyticModel::Lnorm, &req, &[0.0, 1.0], false);
     Ok(q_cp_list(&r, ANALYTIC_CPMETHOD, vec![]))
 }
 
@@ -1035,7 +1227,7 @@ fn dlnorm_cp(x: Robj, y: Robj) -> Result<List> {
     let x = real_vec(&x, "x")?;
     let y = real_vec(&y, "y")?;
     let req = make_request(x, y, vec![0.5], None, None, None);
-    let r = predict(LogNormal, &req, &[0.0, 1.0]);
+    let r = predict_analytic(AnalyticModel::Lnorm, &req, &[0.0, 1.0], false);
     Ok(d_cp_list(&r, ANALYTIC_CPMETHOD, vec![]))
 }
 
@@ -1045,7 +1237,7 @@ fn plnorm_cp(x: Robj, y: Robj) -> Result<List> {
     let x = real_vec(&x, "x")?;
     let y = real_vec(&y, "y")?;
     let req = make_request(x, y.clone(), vec![0.5], None, None, None);
-    let r = predict(LogNormal, &req, &[0.0, 1.0]);
+    let r = predict_analytic(AnalyticModel::Lnorm, &req, &[0.0, 1.0], false);
     let ml_cdf = cdf_at(&LogNormal, &r.ml_params, &y);
     let cp_cdf = cdf_at(&LogNormal, &r.cp_params, &y);
     Ok(p_cp_list(&r, ml_cdf, cp_cdf, ANALYTIC_CPMETHOD, vec![]))
@@ -1058,7 +1250,7 @@ fn rlnorm_cp(n: Robj, x: Robj) -> Result<List> {
     let x = real_vec(&x, "x")?;
     let p: Vec<f64> = (0..n).map(|i| (i as f64 + 0.5) / n as f64).collect();
     let req = make_request(x.clone(), x, p, None, None, None);
-    let r = predict(LogNormal, &req, &[0.0, 1.0]);
+    let r = predict_analytic(AnalyticModel::Lnorm, &req, &[0.0, 1.0], false);
     Ok(r_cp_list(&r, ANALYTIC_CPMETHOD, vec![]))
 }
 
@@ -1127,7 +1319,7 @@ fn qgamma_cp(x: Robj, p: Robj) -> Result<List> {
     let x = real_vec(&x, "x")?;
     let p = real_vec(&p, "p")?;
     let req = make_request(x.clone(), x, p, None, None, None);
-    let r = predict(Gamma, &req, &[1.0, 1.0]);
+    let r = predict_gamma(&req, &[1.0, 1.0]);
     Ok(q_cp_list(&r, ADHOC_DMGS_CPMETHOD, vec![]))
 }
 
@@ -1137,7 +1329,7 @@ fn dgamma_cp(x: Robj, y: Robj) -> Result<List> {
     let x = real_vec(&x, "x")?;
     let y = real_vec(&y, "y")?;
     let req = make_request(x, y, vec![0.5], None, None, None);
-    let r = predict(Gamma, &req, &[1.0, 1.0]);
+    let r = predict_gamma(&req, &[1.0, 1.0]);
     Ok(d_cp_list(&r, ADHOC_DMGS_CPMETHOD, vec![]))
 }
 
@@ -1147,7 +1339,7 @@ fn pgamma_cp(x: Robj, y: Robj) -> Result<List> {
     let x = real_vec(&x, "x")?;
     let y = real_vec(&y, "y")?;
     let req = make_request(x, y.clone(), vec![0.5], None, None, None);
-    let r = predict(Gamma, &req, &[1.0, 1.0]);
+    let r = predict_gamma(&req, &[1.0, 1.0]);
     let ml_cdf = cdf_at(&Gamma, &r.ml_params, &y);
     let cp_cdf = cdf_at(&Gamma, &r.cp_params, &y);
     Ok(p_cp_list(&r, ml_cdf, cp_cdf, ADHOC_DMGS_CPMETHOD, vec![]))
@@ -1160,7 +1352,7 @@ fn rgamma_cp(n: Robj, x: Robj) -> Result<List> {
     let x = real_vec(&x, "x")?;
     let p: Vec<f64> = (0..n).map(|i| (i as f64 + 0.5) / n as f64).collect();
     let req = make_request(x.clone(), x, p, None, None, None);
-    let r = predict(Gamma, &req, &[1.0, 1.0]);
+    let r = predict_gamma(&req, &[1.0, 1.0]);
     Ok(r_cp_list(&r, ADHOC_DMGS_CPMETHOD, vec![]))
 }
 
@@ -1178,7 +1370,7 @@ fn qexp_cp(x: Robj, p: Robj) -> Result<List> {
     let x = real_vec(&x, "x")?;
     let p = real_vec(&p, "p")?;
     let req = make_request(x.clone(), x, p, None, None, None);
-    let r = predict(Exponential, &req, &[1.0]);
+    let r = predict_analytic(AnalyticModel::Expon, &req, &[1.0], false);
     Ok(q_cp_list(&r, ANALYTIC_CPMETHOD, vec![]))
 }
 
@@ -1188,7 +1380,7 @@ fn dexp_cp(x: Robj, y: Robj) -> Result<List> {
     let x = real_vec(&x, "x")?;
     let y = real_vec(&y, "y")?;
     let req = make_request(x, y, vec![0.5], None, None, None);
-    let r = predict(Exponential, &req, &[1.0]);
+    let r = predict_analytic(AnalyticModel::Expon, &req, &[1.0], false);
     Ok(d_cp_list(&r, ANALYTIC_CPMETHOD, vec![]))
 }
 
@@ -1198,7 +1390,7 @@ fn pexp_cp(x: Robj, y: Robj) -> Result<List> {
     let x = real_vec(&x, "x")?;
     let y = real_vec(&y, "y")?;
     let req = make_request(x, y.clone(), vec![0.5], None, None, None);
-    let r = predict(Exponential, &req, &[1.0]);
+    let r = predict_analytic(AnalyticModel::Expon, &req, &[1.0], false);
     let ml_cdf = cdf_at(&Exponential, &r.ml_params, &y);
     let cp_cdf = cdf_at(&Exponential, &r.cp_params, &y);
     Ok(p_cp_list(&r, ml_cdf, cp_cdf, ANALYTIC_CPMETHOD, vec![]))
@@ -1211,7 +1403,7 @@ fn rexp_cp(n: Robj, x: Robj) -> Result<List> {
     let x = real_vec(&x, "x")?;
     let p: Vec<f64> = (0..n).map(|i| (i as f64 + 0.5) / n as f64).collect();
     let req = make_request(x.clone(), x, p, None, None, None);
-    let r = predict(Exponential, &req, &[1.0]);
+    let r = predict_analytic(AnalyticModel::Expon, &req, &[1.0], false);
     Ok(r_cp_list(&r, ANALYTIC_CPMETHOD, vec![]))
 }
 
@@ -1259,6 +1451,13 @@ extendr_module! {
     fn pgev_p1_cp;
     fn rgev_p1_cp;
     fn tgev_p1_cp;
+
+    // gev_p12
+    fn qgev_p12_cp;
+    fn dgev_p12_cp;
+    fn pgev_p12_cp;
+    fn rgev_p12_cp;
+    fn tgev_p12_cp;
 
     // gpd_k1
     fn qgpd_k1_cp;

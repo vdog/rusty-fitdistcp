@@ -26,6 +26,7 @@ from . import (  # noqa: F401  (re-exported for `rusty_fitdistcp.<name>` access)
     gamma,
     genextreme,
     genextreme_p1,
+    genextreme_p12,
     genpareto,
     gumbel,
     lnorm,
@@ -34,11 +35,11 @@ from . import (  # noqa: F401  (re-exported for `rusty_fitdistcp.<name>` access)
     weibull,
 )
 
-# The reference `__all__` includes `genextreme_p12`; we deliberately OMIT it
-# (deferred — see the Phase B scope decisions).
+# The reference `__all__` includes `genextreme_p12` (Phase 6, Issue 6).
 __all__ = [
     "genextreme",
     "genextreme_p1",
+    "genextreme_p12",
     "genpareto",
     "expon",
     "gamma",

@@ -84,6 +84,49 @@ pub fn movexiawayfromzero(xi: f64) -> f64 {
     }
 }
 
+/// Clamp values to the GEV support (reference `fixgevrange`, `005_utils.R`).
+///
+/// The reference `fixgevrange(y, v1, v2, v3)` deals with situations in which the
+/// user (or the DMGS expansion) produces a value outside the GEV support. It
+/// uses the **nudged** shape bound so that a shape moved away from zero by
+/// [`movexiawayfromzero`] does not push an observation outside the support:
+///
+/// - For a **negative** shape (`v3 < 0`) the GEV has a finite upper endpoint
+///   `v1 - v2/v3`; values above `v1 - v2/(v3 - minxi)` are clamped down to it.
+/// - For a **positive** shape (`v3 > 0`) the GEV has a finite lower endpoint
+///   `v1 - v2/v3`; values below `v1 - v2/(v3 + minxi)` are clamped up to it.
+/// - For `v3 == 0` (the Gumbel limit) the support is the whole real line and the
+///   values are returned unchanged.
+///
+/// `minxi` is [`MIN_XI`] (`10^-7`), matching the reference. This is a direct
+/// transcription of the reference helper and is used by
+/// [`crate::api::predict_gev`] to clamp the CP quantiles to the support bound
+/// (Issue 4, Phase 4).
+///
+/// The input is returned as a new `Vec`; the caller's slice is not modified.
+pub fn fixgevrange(y: &[f64], v1: f64, v2: f64, v3: f64) -> Vec<f64> {
+    let mut out = y.to_vec();
+    if v3 < 0.0 {
+        // ximax = v1 - v2/(v3 - minxi)
+        let ximax = v1 - v2 / (v3 - MIN_XI);
+        for yi in out.iter_mut() {
+            if *yi > ximax {
+                *yi = ximax;
+            }
+        }
+    }
+    if v3 > 0.0 {
+        // ximin = v1 - v2/(v3 + minxi)
+        let ximin = v1 - v2 / (v3 + MIN_XI);
+        for yi in out.iter_mut() {
+            if *yi < ximin {
+                *yi = ximin;
+            }
+        }
+    }
+    out
+}
+
 /// The generalized extreme value (GEV) distribution model.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct GenExtreme;
@@ -152,6 +195,21 @@ impl GenExtreme {
         }
     }
 
+    /// The lower support bound `ml_min` (the positive-shape counterpart of
+    /// [`GenExtreme::ml_max`]).
+    ///
+    /// For a **positive** shape the GEV has a finite lower endpoint
+    /// `loc - scale/shape`; for `shape <= 0` the support is unbounded below and
+    /// this returns `-inf`. This is the bound the reference `fixgevrange` clamps
+    /// to for a positive shape (Issue 4, Phase 4).
+    pub fn ml_min(&self, loc: f64, scale: f64, shape: f64) -> f64 {
+        if shape > 0.0 {
+            loc - scale / shape
+        } else {
+            f64::NEG_INFINITY
+        }
+    }
+
     /// Whether the DMGS expansion must revert to the MLE (reference `revert2ml`).
     ///
     /// The reference `qgev_cp` sets `revert2ml = abs(v3hat) >= 1`: when the
@@ -176,6 +234,44 @@ impl Derivatives for GenExtreme {
 
     fn n_params(&self) -> usize {
         3
+    }
+
+    /// `setics`-style initial conditions (reference `gev_setics`, Phase 3).
+    ///
+    /// The reference `gev_setics(x, ics)` replaces a sentinel `ics = [0, 0, 0]`
+    /// with `[mean(x), sd(x), 0]` (the sample mean and the `n-1` sample SD, R's
+    /// `sd`). The Rust multi-start strategy uses this **data-driven** start as an
+    /// additional start alongside the caller's `init`, so it is returned
+    /// unconditionally (the sentinel check is the reference's way of deciding
+    /// *whether* to use the heuristic; the multi-start always wants it).
+    fn setics(&self, y: &[f64], _init: &[f64]) -> Vec<f64> {
+        vec![
+            crate::models::sample_mean(y),
+            crate::models::sample_std_ddof1(y),
+            0.0,
+        ]
+    }
+
+    /// Reject the GEV degenerate region (Phase 3, Issue 3).
+    ///
+    /// The GEV log-likelihood has a **spurious** maximum as `scale -> 0` and
+    /// `shape -> +inf` with `loc -> min(y)`: the density concentrates on the
+    /// sample minimum and the log-likelihood grows without bound. The reference
+    /// `optim` does not find this point, but a multi-start BFGS/Nelder-Mead can.
+    ///
+    /// The guard rejects a non-positive scale and a runaway shape
+    /// (`|shape| >= 10`). It deliberately does **not** reject `|shape| >= 1`:
+    /// the reference `optim` legitimately returns `|shape| >= 1` for some short
+    /// records (e.g. the symmetric 3-point dataset `[-1, 0, 1]` gives
+    /// `shape ~ -1.32`), and the reference `gev_checkmle` bounds are "currently
+    /// not used". The degeneracy is characterised by the vanishing scale, so the
+    /// shape bound is set generously to catch only the runaway.
+    fn valid_params(&self, params: &[f64]) -> bool {
+        params.len() == 3
+            && params[1] > 0.0
+            && params[1].is_finite()
+            && params[2].is_finite()
+            && params[2].abs() < 10.0
     }
 
     /// Analytic score (reference `gev_logfd`, summed over observations).
@@ -410,6 +506,53 @@ mod tests {
         assert_close(m.ml_max(1.4, 0.28, -0.3), expected, "ml_max(neg)");
         assert!(m.ml_max(1.4, 0.28, 0.0).is_infinite());
         assert!(m.ml_max(1.4, 0.28, 0.3).is_infinite());
+    }
+
+    #[test]
+    fn ml_min_is_lower_endpoint_for_positive_shape() {
+        // Positive-shape counterpart of ml_max: loc - scale/shape for shape > 0.
+        let m = GenExtreme;
+        // loc=1.4, scale=0.28, shape=0.3 => 1.4 - 0.28/0.3 = 0.4666...
+        let expected = 1.4 - 0.28 / 0.3;
+        assert_close(m.ml_min(1.4, 0.28, 0.3), expected, "ml_min(pos)");
+        assert!(m.ml_min(1.4, 0.28, 0.0).is_infinite());
+        assert!(m.ml_min(1.4, 0.28, -0.3).is_infinite());
+    }
+
+    #[test]
+    fn fixgevrange_clamps_to_support() {
+        // Reference `fixgevrange` (005_utils.R): negative shape clamps down to
+        // `v1 - v2/(v3 - minxi)`; positive shape clamps up to `v1 - v2/(v3 + minxi)`.
+        let m = GenExtreme;
+        let (v1, v2) = (1.4, 0.28);
+
+        // Negative shape: upper bound ~ 1.4 - 0.28/(-0.3) = 2.3333...
+        let v3 = -0.3;
+        let ximax = v1 - v2 / (v3 - MIN_XI);
+        let y = [1.0, 2.0, 2.5, 3.0];
+        let out = fixgevrange(&y, v1, v2, v3);
+        assert_close(out[0], 1.0, "neg in-support unchanged");
+        assert_close(out[1], 2.0, "neg in-support unchanged");
+        assert_close(out[2], ximax, "neg above bound clamped");
+        assert_close(out[3], ximax, "neg above bound clamped");
+        // The clamped value must be within the true (un-nudged) support.
+        assert!(out[2] <= m.ml_max(v1, v2, v3));
+
+        // Positive shape: lower bound ~ 1.4 - 0.28/0.3 = 0.4666...
+        let v3 = 0.3;
+        let ximin = v1 - v2 / (v3 + MIN_XI);
+        let y = [0.0, 0.4, 0.5, 1.0];
+        let out = fixgevrange(&y, v1, v2, v3);
+        assert_close(out[0], ximin, "pos below bound clamped");
+        assert_close(out[1], ximin, "pos below bound clamped");
+        assert_close(out[2], 0.5, "pos in-support unchanged");
+        assert_close(out[3], 1.0, "pos in-support unchanged");
+        assert!(out[0] >= m.ml_min(v1, v2, v3));
+
+        // Shape == 0 (Gumbel limit): support is the whole real line, unchanged.
+        let y = [-5.0, 0.0, 5.0];
+        let out = fixgevrange(&y, v1, v2, 0.0);
+        assert_eq!(out, y);
     }
 
     #[test]
