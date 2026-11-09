@@ -335,13 +335,7 @@ fn golden_short_record_loglik_matches_reference() {
         );
 
         // (2) The log-likelihood matches the reference at the §7.2 tolerance.
-        assert_close(
-            r.loglik,
-            ref_loglik,
-            RTOL,
-            ATOL,
-            &format!("{name}.loglik"),
-        );
+        assert_close(r.loglik, ref_loglik, RTOL, ATOL, &format!("{name}.loglik"));
 
         // (3) The fitted parameters match the reference (optimizer tolerance).
         compare_vec(

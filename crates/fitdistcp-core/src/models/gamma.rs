@@ -769,8 +769,8 @@ mod tests {
         // (shape, scale) surface is flatter so the optimizer stops slightly
         // earlier).
         let rate_fit = fit(&Gamma, &y, &[1.0, 1.0]);
-        let shape_rel = (scale_fit.ml_params[0] - rate_fit.ml_params[0]).abs()
-            / rate_fit.ml_params[0].abs();
+        let shape_rel =
+            (scale_fit.ml_params[0] - rate_fit.ml_params[0]).abs() / rate_fit.ml_params[0].abs();
         let scale_rel = (scale_fit.ml_params[1] - 1.0 / rate_fit.ml_params[1]).abs()
             / (1.0 / rate_fit.ml_params[1]).abs();
         assert!(

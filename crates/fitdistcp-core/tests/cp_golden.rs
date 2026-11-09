@@ -505,7 +505,13 @@ fn golden_gamma_weibull_residuals() {
         );
         // Sanity: the reference params are the (shape, scale) MLE.
         assert_close(r.ml_params[0], ref_params[0], 1e-4, 1e-6, "gamma.shape");
-        assert_close(1.0 / r.ml_params[1], ref_params[1], 1e-4, 1e-6, "gamma.scale");
+        assert_close(
+            1.0 / r.ml_params[1],
+            ref_params[1],
+            1e-4,
+            1e-6,
+            "gamma.scale",
+        );
     }
 
     // --- weibull: powf round-off reduction ----------------------------------

@@ -1211,8 +1211,7 @@ impl DmgsModel for Weibull {
             / e25;
         let d21 = e17
             * (v1
-                * (e13
-                    + x * ((e11 * ((e9 - 2.0) * ln_e1).exp() - e15) * e6 + e24 * e3) / v2
+                * (e13 + x * ((e11 * ((e9 - 2.0) * ln_e1).exp() - e15) * e6 + e24 * e3) / v2
                     - (e19 * e6 + e3))
                 - (e3 + x * e2 * e8 / v2))
             / e25;
