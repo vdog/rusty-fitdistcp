@@ -189,15 +189,35 @@ jobs:
       # "Unable to download and extract artifact" and fails the whole job.
       # Filtering by `pattern` restricts the download to the real release
       # assets (R tarball, wheels, sdist).
+      #
+      # IMPORTANT: `pattern` is a SINGLE glob, NOT a newline-separated list.
+      # A YAML block scalar (`pattern: |` with one name per line) is passed
+      # verbatim as the literal string "r-source-tarball\nwheels-*\nsdist\n",
+      # which matches no artifact names — so nothing is downloaded, `dist/`
+      # stays empty, and every `files:` glob in action-gh-release then reports
+      # "does not match any files" (the symptom that broke the v0.0.2 release).
+      # Use ONE brace-expansion glob (supported by @actions/glob) to match all
+      # three artifact families in a single pattern.
       - name: Download release artifacts
         uses: actions/download-artifact@v4
         with:
           path: dist
-          pattern: |
-            r-source-tarball
-            wheels-*
-            sdist
+          pattern: "{r-source-tarball,wheels-*,sdist}"
           merge-multiple: false
+
+      # DIAG: prove what the download step actually produced. If `dist/` is
+      # empty (or the expected subdirectories are missing), the `pattern` above
+      # did not match — which is exactly the failure mode this step guards
+      # against. `find` prints the full tree so the next run's log shows the
+      # real layout instead of only the downstream "does not match any files".
+      - name: "DIAG: list downloaded artifacts"
+        run: |
+          echo "=== DIAG: dist/ tree ==="
+          find dist -type f -print 2>/dev/null || echo "(dist/ does not exist)"
+          echo "=== DIAG: expected release assets ==="
+          ls -la dist/r-source-tarball/*.tar.gz 2>/dev/null || echo "MISSING: dist/r-source-tarball/*.tar.gz"
+          ls -la dist/wheels-*/*.whl 2>/dev/null || echo "MISSING: dist/wheels-*/*.whl"
+          ls -la dist/sdist/*.tar.gz 2>/dev/null || echo "MISSING: dist/sdist/*.tar.gz"
 
       - name: Create GitHub release
         uses: softprops/action-gh-release@v2
