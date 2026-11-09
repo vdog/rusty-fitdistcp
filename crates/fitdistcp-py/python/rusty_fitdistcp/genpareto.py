@@ -15,9 +15,10 @@ def ppf(x, p=None, kloc=0, ics=None, fdalpha=0.01, customprior=0,
     """GPD CP predictive quantiles (reference ``genpareto.ppf``)."""
     if p is None:
         p = np.arange(0.1, 1.0, 0.1)
-    ics = None if ics is None else np.asarray(ics, dtype=float)
+    ics = None if ics is None else np.atleast_1d(np.asarray(ics, dtype=float))
     return _fitdistcp.ppf_genpareto_ref(
-        np.asarray(x, dtype=float), np.asarray(p, dtype=float),
+        np.atleast_1d(np.asarray(x, dtype=float)),
+        np.atleast_1d(np.asarray(p, dtype=float)),
         kloc=float(kloc), ics=ics, fdalpha=fdalpha, customprior=customprior,
         minxi=float(minxi), maxxi=float(maxxi), means=means,
         waicscores=waicscores, extramodels=extramodels, pdf=pdf,
@@ -28,9 +29,10 @@ def ppf(x, p=None, kloc=0, ics=None, fdalpha=0.01, customprior=0,
 def rvs(n, x, kloc=0, ics=None, minxi=-1, maxxi=2.0,
         extramodels=False, ru=False, mlcp=True, debug=False):
     """GPD CP random deviates (reference ``genpareto.rvs``)."""
-    ics = None if ics is None else np.asarray(ics, dtype=float)
+    ics = None if ics is None else np.atleast_1d(np.asarray(ics, dtype=float))
     return _fitdistcp.rvs_genpareto_ref(
-        int(n), np.asarray(x, dtype=float), kloc=float(kloc), ics=ics,
+        int(n), np.atleast_1d(np.asarray(x, dtype=float)), kloc=float(kloc),
+        ics=ics,
         minxi=float(minxi), maxxi=float(maxxi), extramodels=extramodels,
         ru=ru, mlcp=mlcp,
     )
@@ -39,10 +41,10 @@ def rvs(n, x, kloc=0, ics=None, minxi=-1, maxxi=2.0,
 def pdf(x, y=None, kloc=0, ics=None, minxi=-1, maxxi=2.0,
         ru=False, ru_nsamples=1000):
     """GPD CP predictive density (reference ``genpareto.pdf``)."""
-    y = None if y is None else np.asarray(y, dtype=float)
-    ics = None if ics is None else np.asarray(ics, dtype=float)
+    y = None if y is None else np.atleast_1d(np.asarray(y, dtype=float))
+    ics = None if ics is None else np.atleast_1d(np.asarray(ics, dtype=float))
     return _fitdistcp.pdf_genpareto_ref(
-        np.asarray(x, dtype=float), y, kloc=float(kloc), ics=ics,
+        np.atleast_1d(np.asarray(x, dtype=float)), y, kloc=float(kloc), ics=ics,
         minxi=float(minxi), maxxi=float(maxxi), ru=ru, ru_nsamples=ru_nsamples,
     )
 
@@ -50,9 +52,9 @@ def pdf(x, y=None, kloc=0, ics=None, minxi=-1, maxxi=2.0,
 def cdf(x, y=None, kloc=0, ics=None, minxi=-1, maxxi=2.0,
         ru=False, ru_nsamples=1000):
     """GPD CP predictive CDF (reference ``genpareto.cdf``)."""
-    y = None if y is None else np.asarray(y, dtype=float)
-    ics = None if ics is None else np.asarray(ics, dtype=float)
+    y = None if y is None else np.atleast_1d(np.asarray(y, dtype=float))
+    ics = None if ics is None else np.atleast_1d(np.asarray(ics, dtype=float))
     return _fitdistcp.cdf_genpareto_ref(
-        np.asarray(x, dtype=float), y, kloc=float(kloc), ics=ics,
+        np.atleast_1d(np.asarray(x, dtype=float)), y, kloc=float(kloc), ics=ics,
         minxi=float(minxi), maxxi=float(maxxi), ru=ru, ru_nsamples=ru_nsamples,
     )

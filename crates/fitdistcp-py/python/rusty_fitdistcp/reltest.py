@@ -53,11 +53,12 @@ def reltest(model="norm", ntrials=100, nx=30,
         raise ValueError(
             f"unknown reltest model: {model!r}; expected one of {_MODELS}"
         )
-    p = np.asarray(p, dtype=float)
+    p = np.atleast_1d(np.asarray(p, dtype=float))
     true_params = (
-        None if true_params is None else np.asarray(true_params, dtype=float)
+        None if true_params is None
+        else np.atleast_1d(np.asarray(true_params, dtype=float))
     )
-    init = None if init is None else np.asarray(init, dtype=float)
+    init = None if init is None else np.atleast_1d(np.asarray(init, dtype=float))
     return _fitdistcp.reltest_ref(
         model, int(ntrials), int(nx), p, true_params, init,
     )

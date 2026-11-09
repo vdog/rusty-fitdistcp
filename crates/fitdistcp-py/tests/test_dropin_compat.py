@@ -238,3 +238,62 @@ def test_all_omits_genextreme_p12():
 def test_genextreme_p12_not_importable():
     """The deferred model is not exposed as a submodule."""
     assert not hasattr(rusty_fitdistcp, "genextreme_p12")
+
+
+# ---------------------------------------------------------------------------
+# Scalar arguments (regression: `TypeError: dimensionality mismatch`).
+#
+# The reference `fitdistcp` accepts scalar `p`/`y`/`x` and treats them as a
+# single-element vector. The Rust extension's `PyReadonlyArray1` extractor
+# requires a 1-D array, so a bare `np.asarray(0.5)` (0-D) was rejected with
+#   TypeError: dimensionality mismatch: from=0, to=1
+# The wrappers now normalise scalar-capable args with `np.atleast_1d`.
+# ---------------------------------------------------------------------------
+
+
+def test_scalar_p_accepted():
+    """A scalar ``p`` is accepted and yields a length-1 quantile vector."""
+    res = rusty_fitdistcp.genextreme.ppf([1.0, 2.0, 3.0], p=0.5)
+    assert np.asarray(res["ml_quantiles"]).shape == (1,)
+    assert np.asarray(res["cp_quantiles"]).shape == (1,)
+
+
+def test_scalar_y_accepted_in_pdf_and_cdf():
+    """A scalar ``y`` is accepted by ``pdf``/``cdf``."""
+    pdf = rusty_fitdistcp.genextreme.pdf([1.0, 2.0, 3.0], y=2.0)
+    cdf = rusty_fitdistcp.genextreme.cdf([1.0, 2.0, 3.0], y=2.0)
+    assert np.asarray(pdf["ml_pdf"]).shape == (1,)
+    assert np.asarray(cdf["ml_cdf"]).shape == (1,)
+
+
+def test_scalar_x_accepted():
+    """A scalar ``x`` is accepted and treated as a single-element sample."""
+    res = rusty_fitdistcp.genextreme.ppf(2.0, p=0.5)
+    assert np.asarray(res["ml_quantiles"]).shape == (1,)
+
+
+@pytest.mark.parametrize(
+    "model",
+    ["norm", "gamma", "weibull", "lnorm", "expon", "gumbel", "genpareto"],
+)
+def test_scalar_p_accepted_all_models(model):
+    """Every homogeneous model accepts a scalar ``p``."""
+    mod = getattr(rusty_fitdistcp, model)
+    res = mod.ppf([1.0, 2.0, 3.0], p=0.5)
+    assert np.asarray(res["ml_quantiles"]).shape == (1,)
+
+
+def test_scalar_p_accepted_genextreme_p1():
+    """The predictor model accepts a scalar ``p``."""
+    res = rusty_fitdistcp.genextreme_p1.ppf(
+        [1.0, 2.0, 3.0], t=[0.0, 1.0, 2.0], p=0.5
+    )
+    assert np.asarray(res["ml_quantiles"]).shape == (1,)
+
+
+def test_scalar_p_matches_single_element_array():
+    """A scalar ``p`` gives the same result as a 1-element array ``p``."""
+    x = [1.0, 2.0, 3.0]
+    scalar = rusty_fitdistcp.genextreme.ppf(x, p=0.5)["ml_quantiles"]
+    array = rusty_fitdistcp.genextreme.ppf(x, p=np.array([0.5]))["ml_quantiles"]
+    np.testing.assert_allclose(scalar, array)
