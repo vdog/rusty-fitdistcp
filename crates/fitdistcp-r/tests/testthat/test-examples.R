@@ -125,9 +125,14 @@ test_that("R Example 2: qgev_cp returns ml/cp quantiles and GEV fields", {
   expect_true(all(is.finite(q$ml_quantiles)))
   expect_true(all(is.finite(q$cp_quantiles)))
 
-  # The MLE quantiles are monotone increasing in p.
+  # The MLE quantiles are strictly monotone increasing in p. The CP quantiles
+  # are non-strictly increasing because Phase 4 (Issue 4) clamps them to the GEV
+  # support bound `ml_max`, so the top tail can saturate at the bound (equal
+  # consecutive values).
   expect_true(all(diff(q$ml_quantiles) > 0))
-  expect_true(all(diff(q$cp_quantiles) > 0))
+  expect_true(all(diff(q$cp_quantiles) >= 0))
+  # Every CP quantile is within the support.
+  expect_true(all(q$cp_quantiles <= q$ml_max + 1e-9))
 
   # The CP quantiles have fatter tails than the MLE quantiles: the lower tail
   # is lower and the upper tail is higher.
@@ -292,16 +297,44 @@ test_that("R Example 6: qgev_p1_cp accepts n0 in place of t0", {
 #   > p = seq(0.001, 0.999, 0.001)
 #   > q = qgev_p12_cp(x, t1, t2, t01 = NA, t02 = NA, n01 = n0, n02 = n0, p)
 #
-# The two-predictor GEV (`qgev_p12_cp`) is NOT part of the Phase-1 model list
-# (design §3 lists `genextreme_p1` only). The Rust port therefore does not
-# expose `qgev_p12_cp`; this example is a documented Phase-2 / out-of-scope
-# deferral. We assert the function is absent so the deferral is explicit and
-# the test fails loudly if a future phase adds it without updating this note.
+# Phase 6 (Issue 6) implements the two-predictor GEV (`qgev_p12_cp`). We use the
+# reference `test_example_data.py` `gev_p12` fixture (n = 20) so the test does
+# not depend on the gitignored reference clone.
 # ---------------------------------------------------------------------------
 
-test_that("R Example 7: qgev_p12_cp is a documented out-of-scope deferral", {
-  # The Phase-1 surface exposes the single-predictor GEV only.
-  expect_true(exists("qgev_p1_cp", mode = "function"))
-  # The two-predictor GEV is not part of Phase 1 (design §3).
-  expect_false(exists("qgev_p12_cp", mode = "function"))
+# Reference `test_example_data.py` `gev_p12` (n = 20), `t1 = 1:20`,
+# `t2 = 11:30`.
+ex7_x <- c(
+  -0.9913480238809794, -0.9769235070688991, -0.8621908965345157,
+  -0.7398677117373739, -1.1516382552121482, -0.8197479252398926,
+  -0.7681271113256107, -1.3148460507732627, -0.47137556796826374,
+  -0.9640522997831006, -0.5531371188766323, -1.4151054520409128,
+  -1.2289727692687278, -1.7617925135393455, -0.6226462562363477,
+  -0.785745191074492, 1.4346107813099191, -1.269218100253865,
+  -2.0722151365158665, 6.571634964444661
+)
+ex7_t1 <- 1:20
+ex7_t2 <- 11:30
+
+test_that("R Example 7: qgev_p12_cp runs with two predictors", {
+  p <- seq(0.1, 0.9, 0.1)
+  q <- qgev_p12_cp(ex7_x, ex7_t1, ex7_t2, t01 = 0, t02 = 0, n01 = NA, n02 = NA, p = p)
+
+  # The 5-parameter model returns the reference keys.
+  expect_length(q$ml_params, 5)
+  expect_true(all(is.finite(q$ml_params)))
+  expect_true(all(is.finite(q$ml_quantiles)))
+  expect_true(all(is.finite(q$cp_quantiles)))
+  expect_true(all(is.finite(q$ml_pdf)))
+  expect_true(all(is.finite(q$cp_pdf)))
+  expect_true("revert2ml" %in% names(q))
+  expect_true("ml_max" %in% names(q))
+})
+
+test_that("R Example 7: qgev_p12_cp accepts n01/n02 in place of t01/t02", {
+  p <- c(0.1, 0.5, 0.9)
+  # `n01 = 10` resolves to `t01 = t1[10]`, `n02 = 10` to `t02 = t2[10]`.
+  q_t0 <- qgev_p12_cp(ex7_x, ex7_t1, ex7_t2, t01 = ex7_t1[10], t02 = ex7_t2[10], n01 = NA, n02 = NA, p = p)
+  q_n0 <- qgev_p12_cp(ex7_x, ex7_t1, ex7_t2, t01 = NA, t02 = NA, n01 = 10, n02 = 10, p = p)
+  expect_equal(q_t0$ml_quantiles, q_n0$ml_quantiles, tolerance = 1e-8)
 })

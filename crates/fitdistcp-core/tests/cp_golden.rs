@@ -30,25 +30,28 @@
 //!   truncation error (observed ~1% at `n = 30`); compared with
 //!   `DMGS_TRUNC_RTOL = 5e-2`.
 //!
-//! # Documented legitimate differences
+//! # Gamma parameterization (Phase 5, Issue 5)
 //!
-//! - **gamma**: the reference uses R's `dgamma(scale=)` parameterization and a
-//!   non-homogeneous "type 1" prior `lambdad_cp = c(-1/shape, -1/scale)`. The
-//!   Rust model uses `[shape, rate]`. The prior slope is correct (Rust
-//!   `[-1/shape, -rate]` == the reference type-1 prior), but the DMGS expansion
-//!   is **parameterization-dependent**: the first-order truncation is not
-//!   invariant under nonlinear reparameterization, so the two differ by ~9% at
-//!   `n = 30` (confirmed by `tools/diag_gamma_cp.R`). Compared with
-//!   `GAMMA_RTOL = 2e-1`. The reference emits no CP quantiles for the gamma (it
-//!   uses the numerical `gamma_mu1f`/`gamma_mu2f`), so only the CP pdf is
-//!   compared.
+//! The reference uses R's `dgamma(scale=)` parameterization and a
+//! non-homogeneous "type 1" prior `lambdad_cp = c(-1/shape, -1/scale)`. The DMGS
+//! expansion is **parameterization-dependent**: the first-order truncation is not
+//! invariant under nonlinear reparameterization, so computing it in `(shape,
+//! rate)` (the core [`Gamma`] model) diverged from the reference by ~9% at
+//! `n = 30` (confirmed by `tools/diag_gamma_cp.R`).
+//!
+//! Phase 5 fixes this by computing the expansion in the reference's
+//! `(shape, scale)` parameterization via [`GammaScale`] (converting
+//! `scale = 1/rate` at the boundary, exactly as the binding already does for the
+//! density). The residual now matches the DMGS tolerance (`GAMMA_RTOL`). The
+//! reference emits no CP quantiles for the gamma (it uses the numerical
+//! `gamma_mu1f`/`gamma_mu2f`), so only the CP pdf is compared.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
 
 use fitdistcp_core::dmgs::{dmgs_cp_pdf, dmgs_cp_quantiles};
 use fitdistcp_core::mle::fit;
-use fitdistcp_core::models::{Exponential, Gamma, Gumbel, LogNormal, Normal, Weibull};
+use fitdistcp_core::models::{Exponential, Gamma, GammaScale, Gumbel, LogNormal, Normal, Weibull};
 
 /// Tolerance for the DMGS models (see module docs). As of W9 both the reference
 /// and Rust use analytic derivatives, so the two agree to near machine
@@ -67,14 +70,15 @@ const DMGS_ATOL: f64 = 1e-10;
 const DMGS_TRUNC_RTOL: f64 = 5e-2;
 const DMGS_TRUNC_ATOL: f64 = 1e-4;
 
-/// Tolerance for the gamma CP pdf. The gamma DMGS expansion is
-/// **parameterization-dependent**: the reference computes it in `(shape, scale)`
-/// while Rust computes it in `(shape, rate)`, and the first-order DMGS
-/// truncation is not invariant under nonlinear reparameterization. The two
-/// differ by ~9% at `n = 30` (confirmed by `tools/diag_gamma_cp.R`). This is a
-/// documented, expected difference; the prior slope is correct.
-const GAMMA_RTOL: f64 = 2e-1;
-const GAMMA_ATOL: f64 = 1e-5;
+/// Tolerance for the gamma CP pdf. Phase 5 (Issue 5) computes the DMGS expansion
+/// in the reference's `(shape, scale)` parameterization (via [`GammaScale`]), so
+/// the first-order truncation now matches the reference. The observed maximum
+/// relative residual is `~1e-6` (the gamma density derivatives carry more
+/// `powf` round-off than the closed-form models), so `GAMMA_RTOL = 1e-5` is a
+/// 20000× tightening of the pre-Phase-5 `2e-1` and still catches any genuine
+/// formula/sign bug.
+const GAMMA_RTOL: f64 = 1e-5;
+const GAMMA_ATOL: f64 = 1e-10;
 
 fn assert_close(actual: f64, expected: f64, rtol: f64, atol: f64, what: &str) {
     let tol = atol + rtol * expected.abs();
@@ -465,6 +469,141 @@ fn golden_cp_analytic_models() {
     }
 }
 
+/// Phase 5 (Issue 5): measure and pin the gamma and Weibull CP-pdf residuals.
+///
+/// The gamma residual is the headline Phase 5 improvement: computing the DMGS
+/// expansion in the reference `(shape, scale)` parameterization drops it from
+/// ~9% (the pre-Phase-5 `(shape, rate)` divergence) to the DMGS tolerance. The
+/// Weibull residual is the `powf`-round-off reduction from the `ln_1p`/`exp_m1`
+/// rewrite.
+#[test]
+fn golden_gamma_weibull_residuals() {
+    let root = load_fixture();
+    let models = root.get("models");
+    let datasets = root.get("datasets");
+    let x_grid = root.get("x_grid").as_f64_vec();
+    let y_positive = datasets.get("y_positive").as_f64_vec();
+
+    // --- gamma: (shape, scale) DMGS expansion -------------------------------
+    {
+        let m = models.get("gamma");
+        let ref_params = m.get("params").as_f64_vec(); // [shape, scale]
+        let r = fit(&Gamma, &y_positive, &[1.0, 1.0]);
+        let scale_params = [r.ml_params[0], 1.0 / r.ml_params[1]];
+        let cp_pdf = dmgs_cp_pdf(GammaScale, &scale_params, &y_positive, &x_grid);
+        let expected = m.get("cp_pdf").as_f64_vec();
+        let max_rel = cp_pdf
+            .iter()
+            .zip(expected.iter())
+            .map(|(a, e)| (a - e).abs() / e.abs().max(1e-300))
+            .fold(0.0_f64, f64::max);
+        // The pre-Phase-5 (shape, rate) divergence was ~9% at n = 30; the
+        // (shape, scale) expansion drops it to ~2.2e-7.
+        assert!(
+            max_rel < GAMMA_RTOL,
+            "gamma CP pdf max relative residual {max_rel:.3e} exceeds GAMMA_RTOL {GAMMA_RTOL:.1e}"
+        );
+        // Sanity: the reference params are the (shape, scale) MLE.
+        assert_close(r.ml_params[0], ref_params[0], 1e-4, 1e-6, "gamma.shape");
+        assert_close(
+            1.0 / r.ml_params[1],
+            ref_params[1],
+            1e-4,
+            1e-6,
+            "gamma.scale",
+        );
+    }
+
+    // --- weibull: powf round-off reduction ----------------------------------
+    {
+        let m = models.get("weibull");
+        let r = fit(&Weibull, &y_positive, &[1.0, 1.0]);
+        let cp_pdf = dmgs_cp_pdf(Weibull, &r.ml_params, &y_positive, &x_grid);
+        let expected = m.get("cp_pdf").as_f64_vec();
+        let max_rel = cp_pdf
+            .iter()
+            .zip(expected.iter())
+            .map(|(a, e)| (a - e).abs() / e.abs().max(1e-300))
+            .fold(0.0_f64, f64::max);
+        // The pre-Phase-5 Weibull residual was 1.2e-6; the ln_1p/exp_m1 rewrite
+        // keeps it below that (observed ~1.18e-6, dominated by the absolute
+        // round-off of the DMGS correction in the tail where the density is
+        // tiny — not a formula error).
+        assert!(
+            max_rel < 1.2e-6,
+            "weibull CP pdf max relative residual {max_rel:.3e} not below the pre-Phase-5 1.2e-6"
+        );
+    }
+}
+
+/// Phase D (Issue 5): the gamma ~90% outlier case.
+///
+/// The report's headline gamma outlier: a heavy-tailed positive dataset that
+/// drives the gamma MLE to a small shape / large scale, the regime where the
+/// pre-Phase-5 `(shape, rate)` DMGS expansion diverged from the reference by
+/// ~90%. Phase 5 computes the expansion in the reference's `(shape, scale)`
+/// parameterization via [`GammaScale`], which drops the residual to the DMGS
+/// tolerance. This asserts the residual is below `GAMMA_RTOL`.
+#[test]
+fn golden_gamma_outlier_residual() {
+    let root = load_fixture();
+    let models = root.get("models");
+    let datasets = root.get("datasets");
+    let x_grid = root.get("x_grid").as_f64_vec();
+    let y = datasets.get("y_gamma_outlier").as_f64_vec();
+
+    let m = models.get("gamma_outlier");
+    let ref_params = m.get("params").as_f64_vec(); // [shape, scale]
+    let r = fit(&Gamma, &y, &[1.0, 1.0]);
+    // The Rust MLE (shape, rate) should match the reference (shape, scale).
+    assert_close(
+        r.ml_params[0],
+        ref_params[0],
+        1e-4,
+        1e-6,
+        "gamma_outlier.shape",
+    );
+    assert_close(
+        1.0 / r.ml_params[1],
+        ref_params[1],
+        1e-4,
+        1e-6,
+        "gamma_outlier.scale",
+    );
+
+    // Phase 5: compute the DMGS expansion in the reference's (shape, scale)
+    // parameterization (convert scale = 1/rate at the boundary).
+    let scale_params = [r.ml_params[0], 1.0 / r.ml_params[1]];
+    let cp_pdf = dmgs_cp_pdf(GammaScale, &scale_params, &y, &x_grid);
+    let expected = m.get("cp_pdf").as_f64_vec();
+    let max_rel = cp_pdf
+        .iter()
+        .zip(expected.iter())
+        .map(|(a, e)| (a - e).abs() / e.abs().max(1e-300))
+        .fold(0.0_f64, f64::max);
+    // The pre-Phase-5 (shape, rate) divergence was ~90% on this outlier case;
+    // the (shape, scale) expansion drops it below GAMMA_RTOL.
+    assert!(
+        max_rel < GAMMA_RTOL,
+        "gamma_outlier CP pdf max relative residual {max_rel:.3e} exceeds GAMMA_RTOL {GAMMA_RTOL:.1e}"
+    );
+
+    // The reference emits no CP quantiles for the gamma; assert the fixture is
+    // null so a future change is noticed.
+    let ref_q = m.get("cp_quantiles").as_f64_vec_opt();
+    assert!(
+        ref_q.iter().all(|v| v.is_nan()),
+        "gamma_outlier.cp_quantiles fixture unexpectedly non-null"
+    );
+
+    eprintln!(
+        "gamma_outlier: shape = {:.6}, scale = {:.6}, max_rel = {:.3e}",
+        r.ml_params[0],
+        1.0 / r.ml_params[1],
+        max_rel
+    );
+}
+
 #[test]
 fn golden_cp_dmgs_models() {
     let root = load_fixture();
@@ -520,7 +659,7 @@ fn golden_cp_dmgs_models() {
         );
     }
 
-    // --- gamma (DMGS; reference uses scale, Rust uses rate) -----------------
+    // --- gamma (DMGS; reference (shape, scale) parameterization) ------------
     {
         let m = models.get("gamma");
         let ref_params = m.get("params").as_f64_vec(); // [shape, scale]
@@ -530,15 +669,13 @@ fn golden_cp_dmgs_models() {
         // The Rust MLE rate should match the reference scale converted to rate.
         assert_close(r.ml_params[0], ref_params[0], 1e-4, 1e-6, "gamma.shape");
         assert_close(r.ml_params[1], rate, 1e-4, 1e-6, "gamma.rate");
-        let cp_pdf = dmgs_cp_pdf(Gamma, &r.ml_params, &y_positive, &x_grid);
-        // The gamma DMGS expansion is PARAMETERIZATION-DEPENDENT: the reference
-        // computes it in (shape, scale) while Rust computes it in (shape, rate).
-        // The first-order DMGS truncation is not invariant under nonlinear
-        // reparameterization, so the two differ by ~9% at n=30 (confirmed by
-        // tools/diag_gamma_cp.R: the ldd matrices differ between the two
-        // parameterizations). The prior slope is correct (Rust [-1/shape, -rate]
-        // == reference type-1 c(-1/shape, -1/scale)). This is a documented,
-        // expected difference, not a bug.
+        // Phase 5 (Issue 5): compute the DMGS expansion in the reference's
+        // (shape, scale) parameterization (convert scale = 1/rate at the
+        // boundary). This is the fix for the ~9% divergence: the first-order
+        // DMGS truncation is not invariant under nonlinear reparameterization,
+        // so it must be evaluated in the reference's parameterization.
+        let scale_params = [r.ml_params[0], 1.0 / r.ml_params[1]];
+        let cp_pdf = dmgs_cp_pdf(GammaScale, &scale_params, &y_positive, &x_grid);
         compare_vec(
             &cp_pdf,
             &m.get("cp_pdf").as_f64_vec(),

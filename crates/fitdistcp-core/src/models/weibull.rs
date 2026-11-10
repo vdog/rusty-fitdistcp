@@ -40,9 +40,14 @@ impl Weibull {
     }
 
     /// Log-density `ln f(y; shape, scale)` at a single point.
+    ///
+    /// Phase 5 (Issue 5): the `z^shape` term is computed as
+    /// `exp(shape · ln z)` from a single `ln z`, which avoids the extra
+    /// argument-reduction round-off of `powf` and reuses the `ln z` already
+    /// needed for the `(shape - 1)·ln z` term.
     pub fn logpdf(&self, y: f64, shape: f64, scale: f64) -> f64 {
-        let z = y / scale;
-        shape.ln() - scale.ln() + (shape - 1.0) * z.ln() - z.powf(shape)
+        let ln_z = (y / scale).ln();
+        shape.ln() - scale.ln() + (shape - 1.0) * ln_z - (shape * ln_z).exp()
     }
 
     /// Density `f(y; shape, scale)` at a single point.
@@ -51,11 +56,15 @@ impl Weibull {
     }
 
     /// CDF `F(y; shape, scale) = 1 - exp(-(y/scale)^shape)`.
+    ///
+    /// Phase 5 (Issue 5): `exp_m1` is used so the small-`z` regime keeps full
+    /// relative precision (the reference `1 - exp(-z)` loses it).
     pub fn cdf(&self, y: f64, shape: f64, scale: f64) -> f64 {
         if y <= 0.0 {
             return 0.0;
         }
-        -(-(y / scale).powf(shape)).exp_m1()
+        let ln_z = (y / scale).ln();
+        -(-(shape * ln_z).exp()).exp_m1()
     }
 
     /// Quantile `F^{-1}(p; shape, scale) = scale (-ln(1 - p))^(1/shape)`.
@@ -76,14 +85,40 @@ impl Derivatives for Weibull {
         2
     }
 
+    /// `setics`-style initial conditions (Phase 3, Issue 3).
+    ///
+    /// The reference seeds the Weibull `optim` from `c(1, 1)`; the Rust
+    /// multi-start strategy adds a **data-driven** start on the right scale: a
+    /// moment-based shape estimate and the sample SD as the scale. The shape is
+    /// the method-of-moments estimate `(sd/mean)^(-1.086)` (the standard Weibull
+    /// shape approximation), clamped to a positive range; the scale is the
+    /// sample SD. This puts the optimizer on the data's scale instead of the
+    /// unit scale, which is what the reference's `optim` start effectively
+    /// achieves for well-scaled data.
+    fn setics(&self, y: &[f64], init: &[f64]) -> Vec<f64> {
+        let mean = crate::models::sample_mean(y);
+        let sd = crate::models::sample_std_ddof1(y);
+        if mean > 0.0 && sd > 0.0 {
+            // Method-of-moments shape: k ≈ (sd/mean)^(-1.086).
+            let shape = (sd / mean).powf(-1.086).clamp(0.1, 20.0);
+            vec![shape, sd]
+        } else {
+            init.to_vec()
+        }
+    }
+
     fn score(&self, params: &[f64], y: &[f64]) -> Vec<f64> {
         let shape = params[0];
         let scale = params[1];
         let n = y.len() as f64;
         // W17 (H4/H6): single gated pass computing the three sums.
+        //
+        // Phase 5 (Issue 5): `z = (y/scale)^shape` is computed as
+        // `exp(shape · ln z)` from the single `ln z` already needed for the
+        // `Σ ln z` term, cutting the `powf` round-off.
         let (l, sum_z, sum_z_ln) = crate::models::par_reduce3(y, |yi| {
             let ln_z = (yi / scale).ln();
-            let z = (yi / scale).powf(shape);
+            let z = (shape * ln_z).exp();
             (ln_z, z, z * ln_z)
         });
         vec![
@@ -99,16 +134,21 @@ impl Derivatives for Weibull {
         let v1 = params[0];
         let v2 = params[1];
         // W17 (H4/H6): gated parallel reduction of the three Hessian sums.
+        //
+        // Phase 5 (Issue 5): all powers of `e1 = x/v2` are derived from a single
+        // `ln_e1` via `exp(k · ln_e1)`, cutting the `powf` round-off.
         let (h11, h12, h22) = crate::models::par_reduce3(y, |x| {
             let e1 = x / v2;
+            let ln_e1 = e1.ln();
             let e2 = v1 - 1.0;
-            let e3 = e1.powf(e2);
+            let e3 = (e2 * ln_e1).exp();
             let e6 = x.ln() - v2.ln();
-            let e7 = e1.powf(v1);
+            let e7 = (v1 * ln_e1).exp();
             let a11 = -(e6 * e6 * e7 + 1.0 / (v1 * v1));
             let a12 = (x * (e3 + v1 * e6 * e3) / v2 - 1.0) / v2;
-            let a22 =
-                -(v1 * (x * (2.0 * e3 + x * e2 * e1.powf(v1 - 2.0) / v2) / v2 - 1.0) / (v2 * v2));
+            let a22 = -(v1
+                * (x * (2.0 * e3 + x * e2 * ((v1 - 2.0) * ln_e1).exp() / v2) / v2 - 1.0)
+                / (v2 * v2));
             (a11, a12, a22)
         });
         vec![h11, h12, h12, h22]
@@ -121,16 +161,20 @@ impl Derivatives for Weibull {
         let v1 = params[0];
         let v2 = params[1];
         // W17 (H4/H6): gated parallel reduction of the four third-derivative sums.
+        //
+        // Phase 5 (Issue 5): all powers of `e1 = x/v2` are derived from a single
+        // `ln_e1` via `exp(k · ln_e1)`, cutting the `powf` round-off.
         let (d111, d112, d122, d222) = crate::models::par_reduce4(y, |x| {
             let e1 = x / v2;
+            let ln_e1 = e1.ln();
             let e2 = v1 - 1.0;
-            let e3 = e1.powf(e2);
+            let e3 = (e2 * ln_e1).exp();
             let e6 = x.ln() - v2.ln();
             let e7 = v1 - 2.0;
-            let e8 = e1.powf(e7);
+            let e8 = (e7 * ln_e1).exp();
             let e9 = 2.0 * e3;
             let e12 = x * e2 * e8 / v2;
-            let e13 = e1.powf(v1);
+            let e13 = (v1 * ln_e1).exp();
             let e14 = v2 * v2;
             let e15 = e9 + e12;
             let e19 = v1 * e6 * e3;
@@ -142,7 +186,9 @@ impl Derivatives for Weibull {
                 / e14);
             let a222 = v1
                 * (2.0 * (x * e15 / v2 - 1.0)
-                    + x * (e9 + x * (4.0 * e8 + x * e7 * e1.powf(v1 - 3.0) / v2) * e2 / v2) / v2)
+                    + x * (e9
+                        + x * (4.0 * e8 + x * e7 * ((v1 - 3.0) * ln_e1).exp() / v2) * e2 / v2)
+                        / v2)
                 / (v2 * v2 * v2);
             (a111, a112, a122, a222)
         });
@@ -168,14 +214,13 @@ impl Derivatives for Weibull {
         // W17 (H3/H6): gated parallel fill of the two row-major rows.
         let (row0, row1) = out.split_at_mut(ny);
         crate::models::par_fill(row0, y, |ya| {
-            let z = ya / scale;
-            let w = z.powf(shape);
             let l = (ya / scale).ln();
+            let w = (shape * l).exp();
             (1.0 - w) / ya - shape * w * l / ya
         });
         crate::models::par_fill(row1, y, |ya| {
-            let z = ya / scale;
-            let w = z.powf(shape);
+            let l = (ya / scale).ln();
+            let w = (shape * l).exp();
             shape * shape * w / (scale * ya)
         });
         out

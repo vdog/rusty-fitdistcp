@@ -9,6 +9,7 @@
 //! shared API structs, the module skeleton, and the integration/derivative
 //! traits (interfaces only).
 
+pub mod analytic_cp;
 pub mod api;
 pub mod dmgs;
 pub mod logscores;
@@ -21,9 +22,11 @@ pub mod waic;
 
 // Re-export the key shared API types so bindings can `use fitdistcp_core::...`.
 pub use api::{
-    predict, predict_gev, predict_gev_p1, predict_norm_p1, Convergence, FitResult, MleFit,
-    NormP1Result, PredictionRequest,
+    predict, predict_analytic, predict_gev, predict_gev_p1, predict_norm_p1, AnalyticModel,
+    Convergence, FitResult, MleFit, NormP1Result, PredictionRequest,
 };
+// Phase 1 (Issue 1): exact analytic CP quantiles for norm/lnorm/expon.
+pub use analytic_cp::{cp_quantiles_expon, cp_quantiles_lnorm, cp_quantiles_norm};
 // A2: WAIC (reference `utils.py::make_waic`).
 pub use waic::{make_waic, Waic};
 // A3: leave-one-out log-scores (reference `*_logscores`).

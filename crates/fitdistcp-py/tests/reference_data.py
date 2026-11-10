@@ -6,7 +6,7 @@ Phase C reference-port tests deterministic and comparable to the reference.
 
 The reference module defines the vectors as plain Python lists; we keep them as
 lists here and let the tests convert to ``numpy`` arrays. ``genextreme_p12`` is
-deliberately OMITTED (deferred — see the Phase B scope decisions).
+included (Phase 6, Issue 6).
 """
 
 # --- GPD (generalized Pareto) ------------------------------------------------
@@ -139,6 +139,19 @@ gev_p1 = [[
     13.63844, 15.93289, 17.73672, 18.22159, 19.62580, 21.01455,
 ]]
 gev_p1_t = [list(range(1, 21))]
+
+# --- GEV with 2 predictors ---------------------------------------------------
+gev_p12 = [[
+    -0.9913480238809794, -0.9769235070688991, -0.8621908965345157,
+    -0.7398677117373739, -1.1516382552121482, -0.8197479252398926,
+    -0.7681271113256107, -1.3148460507732627, -0.47137556796826374,
+    -0.9640522997831006, -0.5531371188766323, -1.4151054520409128,
+    -1.2289727692687278, -1.7617925135393455, -0.6226462562363477,
+    -0.785745191074492, 1.4346107813099191, -1.269218100253865,
+    -2.0722151365158665, 6.571634964444661,
+]]
+gev_p12_t1 = [list(range(1, 21))]
+gev_p12_t2 = [list(range(11, 31))]
 
 # --- Normal ------------------------------------------------------------------
 norm = [

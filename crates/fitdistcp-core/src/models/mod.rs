@@ -100,6 +100,34 @@ where
     }
 }
 
+/// Sample mean of `x` (Phase 3, Issue 3).
+///
+/// Used by the `setics`-style initial-condition heuristics (the reference
+/// `mean(x)`). Returns `0.0` for an empty slice.
+pub(crate) fn sample_mean(x: &[f64]) -> f64 {
+    if x.is_empty() {
+        return 0.0;
+    }
+    x.iter().sum::<f64>() / x.len() as f64
+}
+
+/// Sample standard deviation with the `n-1` denominator (R's `sd`, NumPy's
+/// `std(x, ddof=1)`), used by the `setics`-style heuristics (Phase 3, Issue 3).
+///
+/// Returns `0.0` for fewer than two observations (the reference `sd` would be
+/// `NA`; the fit is undefined there anyway and the caller's small-n guard
+/// handles it).
+pub(crate) fn sample_std_ddof1(x: &[f64]) -> f64 {
+    let n = x.len();
+    if n < 2 {
+        return 0.0;
+    }
+    let nf = n as f64;
+    let mean = x.iter().sum::<f64>() / nf;
+    let ss: f64 = x.iter().map(|&xi| (xi - mean) * (xi - mean)).sum();
+    (ss / (nf - 1.0)).sqrt()
+}
+
 // --- Phase 1 distribution models (§3) -------------------------------------
 //
 // Ten models, split by integration path:
@@ -120,6 +148,7 @@ pub mod expon;
 pub mod gamma;
 pub mod genextreme;
 pub mod genextreme_p1;
+pub mod genextreme_p12;
 pub mod genpareto;
 pub mod gumbel;
 pub mod lnorm;
@@ -128,9 +157,10 @@ pub mod norm_p1;
 pub mod weibull;
 
 pub use expon::Exponential;
-pub use gamma::Gamma;
+pub use gamma::{Gamma, GammaScale};
 pub use genextreme::GenExtreme;
 pub use genextreme_p1::GenExtremeP1;
+pub use genextreme_p12::GenExtremeP12;
 pub use genpareto::GenPareto;
 pub use gumbel::Gumbel;
 pub use lnorm::LogNormal;
@@ -178,6 +208,41 @@ pub trait Derivatives {
     /// a model with parameters on unusual scales.
     fn fd_config(&self) -> FiniteDiffConfig {
         FiniteDiffConfig::default()
+    }
+
+    /// `setics`-style initial-condition heuristic (Phase 3, Issue 3).
+    ///
+    /// Mirrors the reference package's per-model `*_setics` helpers (e.g.
+    /// `gev_setics`, `gpd_k1_setics`, `weibull_setics`): given the observed data
+    /// `y` and the caller's `init`, return a **data-driven** starting point that
+    /// puts the optimizer on the right scale (std-based scale, moment-based
+    /// shape). The reference uses this to seed `optim`; the Rust multi-start
+    /// strategy uses it as an additional start alongside the caller's `init`.
+    ///
+    /// The default returns `init` unchanged (no heuristic), which is correct for
+    /// models whose natural start is already the caller's `init` (e.g. the
+    /// closed-form models). Models with a scale/shape ridge override this.
+    ///
+    /// The returned vector must have length [`Derivatives::n_params`].
+    fn setics(&self, _y: &[f64], init: &[f64]) -> Vec<f64> {
+        init.to_vec()
+    }
+
+    /// Whether `params` is in the model's **valid** parameter region (Phase 3,
+    /// Issue 3).
+    ///
+    /// The multi-start strategy evaluates several starts and keeps the best
+    /// log-likelihood. Some models have a **degenerate** region where the
+    /// log-likelihood is spuriously high (e.g. the GEV with `scale -> 0` and
+    /// `shape -> +inf`, where the density concentrates on the sample minimum).
+    /// The reference guards against this with `*_checkmle` shape bounds (e.g.
+    /// `gev_checkmle(minxi = -1, maxxi = 1)`); the Rust multi-start uses this
+    /// predicate to reject such candidates so a degenerate point cannot win.
+    ///
+    /// The default returns `true` (no constraint). Models with a degenerate
+    /// region override this.
+    fn valid_params(&self, _params: &[f64]) -> bool {
+        true
     }
 
     /// Log-likelihood first derivatives (score) w.r.t. each parameter.
@@ -712,6 +777,14 @@ mod analytic_vs_numerical {
     }
 
     #[test]
+    fn gamma_scale_analytic_matches_numerical() {
+        // Phase 5 (Issue 5): the reference (shape, scale) gamma model. The
+        // analytic score/Hessian/third derivatives must agree with the
+        // numerical fallback of its own log-likelihood.
+        check_model(&GammaScale, &[2.0, 1.3], &positive_sample(), "gamma_scale");
+    }
+
+    #[test]
     fn genextreme_analytic_matches_numerical() {
         // shape != 0 so the analytic score/Hessian are used.
         check_model(
@@ -749,6 +822,24 @@ mod analytic_vs_numerical {
             &[10.0, 0.5, 2.0, 0.1],
             &general_sample(),
             "genextreme_p1",
+        );
+    }
+
+    #[test]
+    fn genextreme_p12_uses_numerical_fallback() {
+        // Phase 6 (Issue 6): the reference's `gev_p12_derivs` helpers are large
+        // auto-generated expressions; this model keeps the numerical fallback, so
+        // the check is trivially satisfied but documents the intent.
+        let t1: Vec<f64> = (0..30).map(|i| i as f64 / 10.0).collect();
+        let t2: Vec<f64> = (0..30).map(|i| (i + 11) as f64 / 10.0).collect();
+        let t1_mean = t1.iter().sum::<f64>() / t1.len() as f64;
+        let t2_mean = t2.iter().sum::<f64>() / t2.len() as f64;
+        let m = GenExtremeP12::new(t1, t2, t1_mean, t2_mean, 1.0, 1.0);
+        check_model(
+            &m,
+            &[10.0, 0.5, 0.0, 0.0, 0.1],
+            &general_sample(),
+            "genextreme_p12",
         );
     }
 }

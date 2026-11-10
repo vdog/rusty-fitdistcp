@@ -1,0 +1,16 @@
+{
+  "source": "stephenjewson/fitdistcp (R package, v0.2.3)",
+  "generator": "tools/generate_gpd_smalln_golden.R",
+  "tolerance": {"rtol": 1e-8, "atol": 1e-10},
+  "models": {
+    "genpareto_smalln": {
+      "params": [2.4551339219897041, -0.6196234897786852],
+      "loglik": -12.785578254497986,
+      "setics": [1.1918654845800902,                  0],
+      "note": "gpd_k1_setics + gpd_k1_loglik MLE on a fixed n = 10 record; params [scale, shape]"
+    }
+  },
+  "datasets": {
+    "y_smalln": [              0.31, 0.79000000000000004, 1.1599999999999999, 2.4500000000000002, 1.0700000000000001, 3.6200000000000001, 0.14000000000000001, 1.9399999999999999, 2.6200000000000001,               0.11]
+  }
+}

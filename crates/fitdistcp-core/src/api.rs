@@ -57,6 +57,13 @@ pub struct MleFit {
     /// `true` when `n` is below the small-n threshold (§4.4); results are flagged
     /// rather than silently degraded.
     pub small_n: bool,
+    /// The starting point that produced the winning candidate (Phase 3, Issue 3).
+    ///
+    /// The multi-start strategy evaluates several starts (the caller's `init`,
+    /// the model's `setics` heuristic, and perturbations) and keeps the one with
+    /// the best log-likelihood. This field records that winning start so the
+    /// choice is diagnosable. It has length `n_params`.
+    pub start: Vec<f64>,
 }
 
 /// Full result of a calibrated-prior (CP) prediction, shared by both bindings.
@@ -117,12 +124,189 @@ pub struct FitResult {
     pub convergence: Convergence,
     /// `true` when the sample size is below the small-n threshold (§4.4).
     pub small_n: bool,
+    /// The starting point that produced the winning MLE candidate (Phase 3,
+    /// Issue 3). Propagated from [`MleFit::start`] for diagnostics.
+    pub start: Vec<f64>,
+    /// `true` when the CP quantile monotonicity guard fired (Phase A, Issue 4).
+    ///
+    /// The guard ([`crate::models::numerical::enforce_monotone_quantiles`]) is a
+    /// **deliberate Rust-only divergence** from the reference: it raises any CP
+    /// quantile that would decrease in `p` to the running maximum, restoring the
+    /// non-decreasing invariant that the DMGS expansion can violate at small `n`.
+    /// This flag lets callers detect that the returned CP quantiles were clamped
+    /// rather than produced directly by the expansion. It is `false` for models
+    /// that do not apply the guard (e.g. the analytic closed-form models).
+    pub cp_monotone_clamped: bool,
 }
 
 impl FitResult {
     /// Convenience predicate: `true` only when the underlying fit converged.
     pub fn is_converged(&self) -> bool {
         self.convergence.is_converged()
+    }
+}
+
+/// The closed-form models whose CP quantiles have an **exact analytic** formula
+/// (Phase 1, Issue 1).
+///
+/// The reference `fitdistcp` package computes the CP predictive quantiles for
+/// these three models analytically (a Student-t predictive distribution), not
+/// via the DMGS expansion. [`predict_analytic`] dispatches on this enum to the
+/// matching [`crate::analytic_cp`] function.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AnalyticModel {
+    /// Normal: Student-t with `df = n - 1` and the predictive `sg`.
+    Norm,
+    /// Log-normal: `exp(mu + qt * s1 * sqrt(1 + 1/n))`.
+    Lnorm,
+    /// Exponential: `sumx * (alpha^(-1/n) - 1)`.
+    Expon,
+}
+
+/// Fit a closed-form model and build the CP prediction result using the
+/// **exact analytic** CP quantiles (Phase 1, Issue 1).
+///
+/// This is the analytic counterpart of [`predict`]. It mirrors the existing
+/// [`predict_gev`] / [`predict_norm_p1`] specializations: it fits the model by
+/// MLE, then replaces the DMGS CP quantiles with the reference's exact analytic
+/// formula for `norm` / `lnorm` / `expon` (see [`crate::analytic_cp`]).
+///
+/// The CP **density** (`cp_pdf`) and the MLE/CP predictive means still come from
+/// the DMGS expansion, matching the reference's `dnormsub`/`dexpsub`/
+/// `dlnormsub` construction (the reference's analytic CP is a quantile formula;
+/// its CP density is the DMGS-corrected density). Only the CP **quantiles** are
+/// swapped for the exact analytic values, which is the defect Issue 1 fixes.
+///
+/// `use_dmgs` keeps the DMGS path available for the golden cross-check: when
+/// `true`, the CP quantiles are the DMGS values (the pre-Phase-1 behaviour);
+/// when `false` (the default for the bindings), the exact analytic values are
+/// used.
+///
+/// # Panics
+///
+/// Panics if `init.len() != model.n_params()` or if `req.y` is empty.
+pub fn predict_analytic(
+    model: AnalyticModel,
+    req: &PredictionRequest,
+    init: &[f64],
+    use_dmgs: bool,
+) -> FitResult {
+    use crate::dmgs::DmgsIntegrator;
+    use crate::mle::fit;
+
+    // Fit the concrete model. The three closed-form models share the same
+    // `FitResult` shape, so we build it once per model and only differ in the
+    // CP-quantile source.
+    match model {
+        AnalyticModel::Norm => {
+            let m = crate::models::Normal;
+            let mle = fit(&m, &req.y, init);
+            let integ = DmgsIntegrator::new(m);
+            build_analytic_result(
+                &m,
+                &mle,
+                &integ,
+                req,
+                use_dmgs,
+                crate::analytic_cp::cp_quantiles_norm,
+            )
+        }
+        AnalyticModel::Lnorm => {
+            let m = crate::models::LogNormal;
+            let mle = fit(&m, &req.y, init);
+            let integ = DmgsIntegrator::new(m);
+            build_analytic_result(
+                &m,
+                &mle,
+                &integ,
+                req,
+                use_dmgs,
+                crate::analytic_cp::cp_quantiles_lnorm,
+            )
+        }
+        AnalyticModel::Expon => {
+            let m = crate::models::Exponential;
+            let mle = fit(&m, &req.y, init);
+            let integ = DmgsIntegrator::new(m);
+            build_analytic_result(
+                &m,
+                &mle,
+                &integ,
+                req,
+                use_dmgs,
+                crate::analytic_cp::cp_quantiles_expon,
+            )
+        }
+    }
+}
+
+/// Shared body of [`predict_analytic`]: assemble a [`FitResult`] from an MLE fit
+/// and a DMGS integrator, swapping in the analytic CP quantiles when
+/// `use_dmgs == false`.
+fn build_analytic_result<M, F>(
+    model: &M,
+    mle: &crate::api::MleFit,
+    integ: &crate::dmgs::DmgsIntegrator<M>,
+    req: &PredictionRequest,
+    use_dmgs: bool,
+    analytic_q: F,
+) -> FitResult
+where
+    M: crate::dmgs::DmgsModel + Copy + Sync,
+    F: Fn(&[f64], &[f64], &[f64]) -> Vec<f64>,
+{
+    use crate::dmgs::DmgsModel;
+
+    let ml_pdf: Vec<f64> = req
+        .x
+        .iter()
+        .map(|&xi| DmgsModel::pdf(model, xi, &mle.ml_params))
+        .collect();
+    let ml_quantiles: Vec<f64> = req
+        .p
+        .iter()
+        .map(|&pi| DmgsModel::quantile(model, pi, &mle.ml_params))
+        .collect();
+
+    // CP density from the DMGS expansion (the reference's analytic CP is a
+    // quantile formula; its CP density is the DMGS-corrected density).
+    let cp_pdf = integ.cp_pdf(&mle.ml_params, &req.y, &req.x);
+
+    // CP quantiles: exact analytic (Phase 1) or DMGS (cross-check flag).
+    let cp_quantiles = if use_dmgs {
+        integ.cp_quantiles(&mle.ml_params, &req.y, &req.p)
+    } else {
+        analytic_q(&mle.ml_params, &req.y, &req.p)
+    };
+
+    let maic = mle.loglik - mle.n_params as f64;
+    let (ml_mean, cp_mean) = integ.cp_mean(&mle.ml_params, &req.y);
+
+    FitResult {
+        ml_pdf,
+        cp_pdf,
+        ml_quantiles,
+        cp_quantiles,
+        ml_params: mle.ml_params.clone(),
+        cp_params: mle.ml_params.clone(),
+        ml_se: mle.ml_se.clone(),
+        cp_se: mle.ml_se.clone(),
+        aic: mle.aic,
+        maic,
+        loglik: mle.loglik,
+        waic: None,
+        log_scores: None,
+        ml_mean,
+        cp_mean,
+        waic1: None,
+        waic2: None,
+        ml_oos_logscore: None,
+        cp_oos_logscore: None,
+        convergence: mle.convergence,
+        small_n: mle.small_n,
+        start: mle.start.clone(),
+        // The analytic closed-form models do not apply the monotonicity guard.
+        cp_monotone_clamped: false,
     }
 }
 
@@ -207,6 +391,9 @@ pub fn predict<M: crate::dmgs::DmgsModel + Copy + Sync>(
         cp_oos_logscore: None,
         convergence: mle.convergence,
         small_n: mle.small_n,
+        start: mle.start.clone(),
+        // The generic DMGS path does not apply the monotonicity guard.
+        cp_monotone_clamped: false,
     }
 }
 
@@ -264,9 +451,13 @@ pub fn predict_gev(
         .map(|&pi| DmgsModel::quantile(&model, pi, &mle.ml_params))
         .collect();
 
+    let loc = mle.ml_params[0];
+    let scale = mle.ml_params[1];
     let shape = mle.ml_params[2];
     let revert2ml = model.revert2ml(shape);
 
+    // Tracks whether the CP-quantile monotonicity guard fired (Phase A, Issue 4).
+    let mut cp_monotone_clamped = false;
     let (cp_pdf, cp_quantiles) = if revert2ml {
         // Reference: when |shape| >= 1 the CP output reverts to the MLE output.
         (ml_pdf.clone(), ml_quantiles.clone())
@@ -276,6 +467,46 @@ pub fn predict_gev(
         let cp_q = integ.cp_quantiles(&mle.ml_params, &req.y, &req.p);
         let alpha: Vec<f64> = req.p.iter().map(|&pi| 1.0 - pi).collect();
         let cp_d = integ.cp_pdf_quantile_derived(&mle.ml_params, &req.y, &alpha, fdalpha);
+
+        // Issue 4 (Phase 4): clamp the CP quantiles to the GEV support. At small
+        // n the DMGS expansion can push a CP quantile outside the support (e.g. a
+        // negative 1-in-100 return level for a positive-support fit). The
+        // reference `fixgevrange` clamps to the (nudged) support bound:
+        //   * negative shape: upper bound `loc - scale/(shape - minxi)`;
+        //   * positive shape: lower bound `loc - scale/(shape + minxi)`.
+        let cp_q = crate::models::genextreme::fixgevrange(&cp_q, loc, scale, shape);
+
+        // Extend the `revert2ml` guard: if any CP quantile still leaves the
+        // support (non-finite, or beyond the finite bound), fall back to the MLE
+        // quantile for that point. `fixgevrange` already clamps finite values, so
+        // this catches the non-finite case (e.g. a NaN from a singular expansion)
+        // and any residual out-of-support value.
+        let ml_max = model.ml_max(loc, scale, shape);
+        let ml_min = model.ml_min(loc, scale, shape);
+        let cp_q: Vec<f64> = cp_q
+            .iter()
+            .zip(ml_quantiles.iter())
+            .map(|(&q, &mq)| {
+                if q.is_finite() && q <= ml_max && q >= ml_min {
+                    q
+                } else {
+                    mq
+                }
+            })
+            .collect();
+
+        // Phase A (Issue 4): enforce monotone CP quantiles (non-decreasing in
+        // `p`). The DMGS expansion can produce a non-monotone curve at small n
+        // (e.g. a negative median or a decreasing 1-in-100 return level). The
+        // direction is taken from `req.p`, so a descending `p` (as in the
+        // reliability simulation) yields a correctly oriented non-increasing
+        // curve. This is a deliberate Rust-only divergence from the reference
+        // (which does not sort); see `enforce_monotone_quantiles_for_p` and
+        // `tests/golden/TOLERANCE.md`.
+        let (cp_q, clamped) =
+            crate::models::numerical::enforce_monotone_quantiles_for_p(&cp_q, &req.p);
+        cp_monotone_clamped = clamped;
+
         (cp_d, cp_q)
     };
 
@@ -310,6 +541,207 @@ pub fn predict_gev(
         cp_oos_logscore: None,
         convergence: mle.convergence,
         small_n: mle.small_n,
+        start: mle.start.clone(),
+        cp_monotone_clamped,
+    }
+}
+
+/// Fit a **GPD** model and build the CP prediction result, applying the
+/// reference's `revert2ml` guard and the non-finite-`lddi` guard (Issue 2,
+/// Phase 2).
+///
+/// This is the GPD-specific entry point, mirroring [`predict_gev`]. It differs
+/// from the generic [`predict`] in the reference `qgpd_k1_cp` guards:
+///
+/// 1. **`revert2ml` guard.** The reference sets
+///    `revert2ml = (abs(v2hat) >= 1) || (v2hat > 30)`. When the fitted shape
+///    magnitude reaches 1, or the shape exceeds 30, the DMGS expansion is
+///    numerically unreliable, so the reference reverts the CP output to the MLE
+///    output (`cp_pdf = ml_pdf`, `cp_quantiles = ml_quantiles`). The `v2hat > 30`
+///    clause is the Phase 2 addition.
+/// 2. **Non-finite `lddi` guard.** When the observed information is singular or
+///    non-finite the DMGS expansion cannot be formed; the reference's `solve(ldd)`
+///    would fail. Rather than returning `NaN`, we revert the CP output to the MLE
+///    output (the same fallback as `revert2ml`), so the caller always gets a
+///    finite, meaningful result.
+///
+/// The `small_n` flag is propagated from the MLE fit unchanged (§4.4).
+///
+/// # Panics
+///
+/// Panics if `init.len() != model.n_params()` or if `req.y` is empty.
+pub fn predict_gpd(
+    model: crate::models::GenPareto,
+    req: &PredictionRequest,
+    init: &[f64],
+) -> FitResult {
+    use crate::dmgs::{DmgsIntegrator, DmgsModel};
+    use crate::mle::fit;
+
+    let mle = fit(&model, &req.y, init);
+    let integ = DmgsIntegrator::new(model);
+
+    let ml_pdf: Vec<f64> = req
+        .x
+        .iter()
+        .map(|&xi| DmgsModel::pdf(&model, xi, &mle.ml_params))
+        .collect();
+    let ml_quantiles: Vec<f64> = req
+        .p
+        .iter()
+        .map(|&pi| DmgsModel::quantile(&model, pi, &mle.ml_params))
+        .collect();
+
+    let shape = mle.ml_params[1];
+    let revert2ml = model.revert2ml(shape);
+
+    // Compute the DMGS CP output, then fall back to the MLE output when the
+    // reference's `revert2ml` guard fires OR the expansion produced a non-finite
+    // value (the non-finite-`lddi` guard: `invert` failed, so `cp_quantiles`
+    // returned NaN).
+    //
+    // Tracks whether the CP-quantile monotonicity guard fired (Phase A, Issue 4).
+    let mut cp_monotone_clamped = false;
+    let (cp_pdf, cp_quantiles) = if revert2ml {
+        (ml_pdf.clone(), ml_quantiles.clone())
+    } else {
+        let cp_q = integ.cp_quantiles(&mle.ml_params, &req.y, &req.p);
+        let cp_d = integ.cp_pdf(&mle.ml_params, &req.y, &req.x);
+        if cp_q.iter().all(|v| v.is_finite()) && cp_d.iter().all(|v| v.is_finite()) {
+            // Phase A (Issue 4): enforce monotone CP quantiles (non-decreasing
+            // in `p`). The DMGS expansion can produce a non-monotone curve at
+            // small n. The direction is taken from `req.p`, so a descending `p`
+            // yields a correctly oriented non-increasing curve. This is a
+            // deliberate Rust-only divergence from the reference (which does not
+            // sort); see `enforce_monotone_quantiles_for_p` and
+            // `tests/golden/TOLERANCE.md`.
+            let (cp_q, clamped) =
+                crate::models::numerical::enforce_monotone_quantiles_for_p(&cp_q, &req.p);
+            cp_monotone_clamped = clamped;
+            (cp_d, cp_q)
+        } else {
+            // Non-finite `lddi` (singular/non-finite observed information): the
+            // DMGS expansion is undefined, so return the MLE output rather than
+            // NaN (Issue 2, Phase 2).
+            (ml_pdf.clone(), ml_quantiles.clone())
+        }
+    };
+
+    let maic = mle.loglik - mle.n_params as f64;
+
+    // A1: MLE and CP predictive means (reference `gpd_k1_means`). The reference
+    // reports `rh_flat_mean = inf` for the GPD (integrating over the shape makes
+    // the mean infinite), so `cp_mean` is `+inf`; `ml_mean` is the analytic MLE
+    // mean from `gpd_k1_means`.
+    let (ml_mean, _cp_mean_dmgs) = integ.cp_mean(&mle.ml_params, &req.y);
+    let cp_mean = f64::INFINITY;
+
+    FitResult {
+        ml_pdf,
+        cp_pdf,
+        ml_quantiles,
+        cp_quantiles,
+        ml_params: mle.ml_params.clone(),
+        cp_params: mle.ml_params.clone(),
+        ml_se: mle.ml_se.clone(),
+        cp_se: mle.ml_se.clone(),
+        aic: mle.aic,
+        maic,
+        loglik: mle.loglik,
+        waic: None,
+        log_scores: None,
+        ml_mean,
+        cp_mean,
+        waic1: None,
+        waic2: None,
+        ml_oos_logscore: None,
+        cp_oos_logscore: None,
+        convergence: mle.convergence,
+        small_n: mle.small_n,
+        start: mle.start.clone(),
+        cp_monotone_clamped,
+    }
+}
+
+/// Fit a **gamma** model and build the CP prediction result, computing the DMGS
+/// expansion in the reference's `(shape, scale)` parameterization (Phase 5,
+/// Issue 5).
+///
+/// The core [`crate::models::Gamma`] model fits in `(shape, rate)` (matching R's
+/// `dgamma(rate=)`), but the reference `fitdistcp` computes the DMGS expansion in
+/// `(shape, scale)` with `scale = 1/rate`. The DMGS first-order truncation is
+/// **not invariant under nonlinear reparameterization**, so computing the
+/// expansion in `(shape, rate)` diverges from the reference by ~9% at `n = 30`
+/// (the documented Issue 5 root cause).
+///
+/// This entry point fits in `(shape, rate)` (unchanged), converts
+/// `scale = 1/rate` at the boundary, and runs the CP expansion through
+/// [`crate::models::GammaScale`] (the reference `(shape, scale)` model). The MLE
+/// predictive density/quantiles are identical in either parameterization (they
+/// describe the same distribution), so they come from the `(shape, rate)` fit.
+///
+/// # Panics
+///
+/// Panics if `init.len() != 2` or if `req.y` is empty.
+pub fn predict_gamma(req: &PredictionRequest, init: &[f64]) -> FitResult {
+    use crate::dmgs::{DmgsIntegrator, DmgsModel};
+    use crate::mle::fit;
+    use crate::models::{Gamma, GammaScale};
+
+    // Fit in the core (shape, rate) parameterization.
+    let mle = fit(&Gamma, &req.y, init);
+
+    // MLE predictive density and quantiles (identical in either
+    // parameterization — same distribution).
+    let ml_pdf: Vec<f64> = req
+        .x
+        .iter()
+        .map(|&xi| DmgsModel::pdf(&Gamma, xi, &mle.ml_params))
+        .collect();
+    let ml_quantiles: Vec<f64> = req
+        .p
+        .iter()
+        .map(|&pi| DmgsModel::quantile(&Gamma, pi, &mle.ml_params))
+        .collect();
+
+    // Convert to the reference (shape, scale) parameterization at the boundary
+    // and run the DMGS expansion there (Phase 5, Issue 5).
+    let shape = mle.ml_params[0];
+    let rate = mle.ml_params[1];
+    let scale = 1.0 / rate;
+    let scale_params = [shape, scale];
+    let integ = DmgsIntegrator::new(GammaScale);
+    let cp_pdf = integ.cp_pdf(&scale_params, &req.y, &req.x);
+    let cp_quantiles = integ.cp_quantiles(&scale_params, &req.y, &req.p);
+
+    let maic = mle.loglik - mle.n_params as f64;
+    let (ml_mean, cp_mean) = integ.cp_mean(&scale_params, &req.y);
+
+    FitResult {
+        ml_pdf,
+        cp_pdf,
+        ml_quantiles,
+        cp_quantiles,
+        ml_params: mle.ml_params.clone(),
+        cp_params: mle.ml_params.clone(),
+        ml_se: mle.ml_se.clone(),
+        cp_se: mle.ml_se.clone(),
+        aic: mle.aic,
+        maic,
+        loglik: mle.loglik,
+        waic: None,
+        log_scores: None,
+        ml_mean,
+        cp_mean,
+        waic1: None,
+        waic2: None,
+        ml_oos_logscore: None,
+        cp_oos_logscore: None,
+        convergence: mle.convergence,
+        small_n: mle.small_n,
+        start: mle.start.clone(),
+        // The gamma CP path does not apply the monotonicity guard.
+        cp_monotone_clamped: false,
     }
 }
 
@@ -578,6 +1010,94 @@ pub fn predict_gev_p1(
         cp_oos_logscore: None,
         convergence: mle.convergence,
         small_n: mle.small_n,
+        start: mle.start.clone(),
+        // The genextreme_p12 CP path does not apply the monotonicity guard.
+        cp_monotone_clamped: false,
+    }
+}
+
+/// Fit a **GEV-with-two-predictors** (`genextreme_p12`) model and build the CP
+/// prediction result, applying the reference's negative-shape handling
+/// (Phase 6, Issue 6).
+///
+/// This mirrors [`predict_gev_p1`] for the two-predictor model: the DMGS
+/// expansion is evaluated at the prediction points `t01`/`t02` (via the model's
+/// `centered_prediction1`/`centered_prediction2`), and the reference's
+/// `revert2ml` guard and quantile-derived CP density are applied. The predictors
+/// are centered by their means; the binding resolves `t01`/`t02` from the user's
+/// `t01`/`t02`/`n01`/`n02` via `maket0`.
+///
+/// # Panics
+///
+/// Panics if `init.len() != model.n_params()` or if `req.y` is empty.
+pub fn predict_gev_p12(
+    model: &crate::models::GenExtremeP12,
+    req: &PredictionRequest,
+    init: &[f64],
+    fdalpha: f64,
+) -> FitResult {
+    use crate::dmgs::{DmgsIntegrator, DmgsModel};
+    use crate::mle::fit;
+
+    let mle = fit(model, &req.y, init);
+    let integ = DmgsIntegrator::new(model.clone());
+
+    let ml_pdf: Vec<f64> = req
+        .x
+        .iter()
+        .map(|&xi| DmgsModel::pdf(model, xi, &mle.ml_params))
+        .collect();
+    let ml_quantiles: Vec<f64> = req
+        .p
+        .iter()
+        .map(|&pi| DmgsModel::quantile(model, pi, &mle.ml_params))
+        .collect();
+
+    let shape = mle.ml_params[4];
+    let revert2ml = model.revert2ml(shape);
+
+    let (cp_pdf, cp_quantiles) = if revert2ml {
+        (ml_pdf.clone(), ml_quantiles.clone())
+    } else {
+        let cp_q = integ.cp_quantiles(&mle.ml_params, &req.y, &req.p);
+        let alpha: Vec<f64> = req.p.iter().map(|&pi| 1.0 - pi).collect();
+        let cp_d = integ.cp_pdf_quantile_derived(&mle.ml_params, &req.y, &alpha, fdalpha);
+        (cp_d, cp_q)
+    };
+
+    let maic = mle.loglik - mle.n_params as f64;
+
+    // A1: MLE and CP predictive means (reference `gev_p12_means`). As for the
+    // homogeneous GEV, the reference reports `rh_flat_mean = inf`, so `cp_mean`
+    // is `+inf`; `ml_mean` is the analytic MLE mean.
+    let (ml_mean, _cp_mean_dmgs) = integ.cp_mean(&mle.ml_params, &req.y);
+    let cp_mean = f64::INFINITY;
+
+    FitResult {
+        ml_pdf,
+        cp_pdf,
+        ml_quantiles,
+        cp_quantiles,
+        ml_params: mle.ml_params.clone(),
+        cp_params: mle.ml_params.clone(),
+        ml_se: mle.ml_se.clone(),
+        cp_se: mle.ml_se.clone(),
+        aic: mle.aic,
+        maic,
+        loglik: mle.loglik,
+        waic: None,
+        log_scores: None,
+        ml_mean,
+        cp_mean,
+        waic1: None,
+        waic2: None,
+        ml_oos_logscore: None,
+        cp_oos_logscore: None,
+        convergence: mle.convergence,
+        small_n: mle.small_n,
+        start: mle.start.clone(),
+        // The genextreme_p1 CP path does not apply the monotonicity guard.
+        cp_monotone_clamped: false,
     }
 }
 
@@ -717,6 +1237,8 @@ mod tests {
             cp_oos_logscore: None,
             convergence: Convergence::Converged,
             small_n: false,
+            start: vec![0.0, 1.0],
+            cp_monotone_clamped: false,
         };
         assert!(result.is_converged());
         assert_eq!(result.ml_params.len(), 2);
@@ -785,6 +1307,106 @@ mod tests {
         // must be finite and positive.
         for (i, v) in r.cp_pdf.iter().enumerate() {
             assert!(v.is_finite() && *v > 0.0, "cp_pdf[{i}] = {v}");
+        }
+    }
+
+    // --- Phase 2 (Issue 2): GPD robust initial conditions -------------------
+
+    #[test]
+    fn predict_gpd_dollar_scale_is_finite() {
+        // Issue 2 (Phase 2): GPD on raw dollar-scale data (~10^3-10^5) must fit
+        // without NaN. The binding now seeds the scale from `setics` (the data's
+        // own sd) instead of the hard-coded 1.0.
+        use crate::models::GenPareto;
+        let y = vec![
+            1200.0, 45000.0, 8300.0, 99000.0, 21000.0, 6700.0, 33000.0, 15000.0, 58000.0, 9200.0,
+        ];
+        let init = GenPareto.setics(&y, &[0.0, 0.0]);
+        let req = PredictionRequest {
+            y: y.clone(),
+            x: vec![1000.0, 20000.0, 50000.0],
+            p: vec![0.25, 0.5, 0.75],
+            t: None,
+            t0: None,
+            n0: None,
+            means: None,
+        };
+        let r = predict_gpd(GenPareto, &req, &init);
+        assert!(
+            r.ml_params.iter().all(|v| v.is_finite()),
+            "dollar-scale ml_params not finite: {:?}",
+            r.ml_params
+        );
+        for v in r.cp_pdf.iter().chain(r.cp_quantiles.iter()) {
+            assert!(v.is_finite(), "dollar-scale cp field not finite: {v}");
+        }
+    }
+
+    #[test]
+    fn predict_gpd_reverts_to_ml_for_large_shape() {
+        // The `v2hat > 30` clause: a shape above 30 must revert the CP output to
+        // the MLE output (finite), not return NaN. (The `abs(v2hat) >= 1` clause
+        // already covers shapes >= 1, so the `> 30` clause is a documented
+        // redundancy in the reference; we mirror it exactly.)
+        use crate::models::GenPareto;
+        assert!(GenPareto.revert2ml(31.0));
+        assert!(GenPareto.revert2ml(30.5));
+        assert!(!GenPareto.revert2ml(0.5));
+    }
+
+    // --- Phase 6 (Issue 6): genextreme_p12 ----------------------------------
+
+    #[test]
+    fn predict_gev_p12_produces_finite_output() {
+        // Phase 6 (Issue 6): the 5-parameter GEV-with-two-predictors model must
+        // fit and produce finite MLE/CP quantiles and densities.
+        use crate::models::GenExtremeP12;
+        let t1: Vec<f64> = (1..=20).map(|i| i as f64).collect();
+        let t2: Vec<f64> = (11..=30).map(|i| i as f64).collect();
+        let y = vec![
+            -0.9913480238809794,
+            -0.9769235070688991,
+            -0.8621908965345157,
+            -0.7398677117373739,
+            -1.1516382552121482,
+            -0.8197479252398926,
+            -0.7681271113256107,
+            -1.3148460507732627,
+            -0.47137556796826374,
+            -0.9640522997831006,
+            -0.5531371188766323,
+            -1.4151054520409128,
+            -1.2289727692687278,
+            -1.7617925135393455,
+            -0.6226462562363477,
+            -0.785745191074492,
+            1.4346107813099191,
+            -1.269218100253865,
+            -2.0722151365158665,
+            6.571634964444661,
+        ];
+        let model = GenExtremeP12::new(t1, t2, 0.0, 0.0, 1.0, 1.0);
+        let req = PredictionRequest {
+            y: y.clone(),
+            x: y.clone(),
+            p: (1..10).map(|i| i as f64 * 0.1).collect(),
+            t: None,
+            t0: None,
+            n0: None,
+            means: None,
+        };
+        let r = predict_gev_p12(&model, &req, &[0.0, 0.0, 0.0, 0.0, 0.0], 0.01);
+        assert_eq!(r.ml_params.len(), 5);
+        assert!(
+            r.ml_params.iter().all(|v| v.is_finite()),
+            "ml_params not finite: {:?}",
+            r.ml_params
+        );
+        for v in r.ml_quantiles.iter().chain(r.cp_quantiles.iter()) {
+            assert!(v.is_finite(), "quantile not finite: {v}");
+        }
+        for v in r.ml_pdf.iter().chain(r.cp_pdf.iter()) {
+            assert!(v.is_finite(), "pdf not finite: {v}");
         }
     }
 }

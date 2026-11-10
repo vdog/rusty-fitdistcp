@@ -213,6 +213,23 @@ impl Derivatives for GenExtremeP1 {
     fn n_params(&self) -> usize {
         4
     }
+
+    /// `setics`-style initial conditions (Phase 3, Issue 3).
+    ///
+    /// The reference seeds the GEV-p1 `optim` from `gev_p1_setics`, which uses
+    /// the data mean/SD for the intercept/scale and a zero slope/shape. The Rust
+    /// multi-start strategy adds the same data-driven start:
+    /// `[mean(y), 0, sd(y), 0]` (the predictor is centered, so a zero slope is
+    /// the natural start).
+    fn setics(&self, y: &[f64], init: &[f64]) -> Vec<f64> {
+        let mean = crate::models::sample_mean(y);
+        let sd = crate::models::sample_std_ddof1(y);
+        if sd > 0.0 {
+            vec![mean, 0.0, sd, 0.0]
+        } else {
+            init.to_vec()
+        }
+    }
 }
 
 #[cfg(test)]

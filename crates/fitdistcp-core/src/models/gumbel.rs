@@ -77,6 +77,23 @@ impl Derivatives for Gumbel {
         2
     }
 
+    /// `setics`-style initial conditions (Phase 3, Issue 3).
+    ///
+    /// The reference seeds the Gumbel `optim` from `c(0, 1)`; the Rust
+    /// multi-start strategy adds a **moment-based** start: the Gumbel location
+    /// is the sample mean and the scale is `sd * sqrt(6)/pi` (the Gumbel
+    /// method-of-moments scale, since the Gumbel SD is `scale * pi/sqrt(6)`).
+    fn setics(&self, y: &[f64], init: &[f64]) -> Vec<f64> {
+        let mean = crate::models::sample_mean(y);
+        let sd = crate::models::sample_std_ddof1(y);
+        if sd > 0.0 {
+            let scale = sd * 6.0_f64.sqrt() / std::f64::consts::PI;
+            vec![mean, scale]
+        } else {
+            init.to_vec()
+        }
+    }
+
     fn score(&self, params: &[f64], y: &[f64]) -> Vec<f64> {
         let loc = params[0];
         let scale = params[1];
