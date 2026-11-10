@@ -67,6 +67,15 @@ y_positive <- c(
   0.33, 2.91, 1.02, 0.69, 3.77, 1.34, 0.51, 2.18, 0.88, 1.96,
   0.27, 3.45, 1.21, 0.74, 2.63, 1.08, 0.46, 4.31, 1.72, 0.93
 )
+# Phase D (Issue 5): the gamma ~90% outlier case. A fixed positive dataset with
+# a heavy right tail (a few large values) that drives the gamma MLE to a small
+# shape / large scale, the regime where the pre-Phase-5 (shape, rate) DMGS
+# expansion diverged from the reference by ~90% (the report's headline gamma
+# outlier). The literal is fixed so the fixture is reproducible.
+y_gamma_outlier <- c(
+  0.05, 0.08, 0.11, 0.14, 0.19, 0.23, 0.31, 0.42, 0.58, 0.77,
+  1.05, 1.44, 2.10, 3.35, 5.90, 11.20, 24.50, 61.30, 180.40, 640.70
+)
 
 # Prediction grid and probability levels (fixed).
 x_grid <- c(8.0, 9.0, 10.0, 11.0, 12.0)
@@ -274,6 +283,36 @@ models <- list()
   )
 }
 
+# --- gamma_outlier (DMGS; Phase D, Issue 5) ---------------------------------
+# The ~90% outlier case: a heavy-tailed positive dataset that drives the gamma
+# MLE to a small shape / large scale. This is the regime where the pre-Phase-5
+# (shape, rate) DMGS expansion diverged from the reference by ~90%. The fixture
+# pins the reference CP pdf (computed in the reference (shape, scale)
+# parameterization) so the Rust `GammaScale` residual can be asserted below
+# `GAMMA_RTOL`. As with `gamma`, the reference emits no CP quantiles.
+{
+  x <- y_gamma_outlier
+  nx <- length(x)
+  opt <- optim(c(1, 1), gamma_loglik, x = x, control = OPT_CTRL)
+  v1 <- opt$par[1]; v2 <- opt$par[2]  # [shape, SCALE]
+  ldd <- gamma_ldda(x, v1, v2); lddi <- solve(ldd)
+  lddd <- gamma_lddda(x, v1, v2)
+  lambdad_cp <- c(-1 / v1, -1 / v2)  # reference "type 1" prior
+  f1 <- gamma_f1fa(x_grid, v1, v2)
+  f2 <- gamma_f2fa(x_grid, v1, v2)
+  ml_pdf <- dgamma(x_grid, shape = v1, scale = v2)
+  df1 <- dmgs(lddi, lddd, f1, lambdad_cp, f2, dim = 2)
+  cp_pdf <- pmax(ml_pdf + df1 / nx, 0)
+  ml_q <- qgamma(p_grid, shape = v1, scale = v2)
+  models$gamma_outlier <- list(
+    params = c(v1, v2), ml_pdf = ml_pdf, cp_pdf = cp_pdf,
+    ml_quantiles = ml_q, cp_quantiles = rep(NA_real_, length(p_grid)),
+    note = paste("Phase D gamma ~90% outlier case; DMGS (gamma_* + dmgs);",
+                 "reference params [shape, scale]; type-1 prior",
+                 "c(-1/shape,-1/scale); CP quantiles not emitted")
+  )
+}
+
 # --- Emit JSON --------------------------------------------------------------
 out_dir <- "tests/golden"
 dir.create(out_dir, showWarnings = FALSE, recursive = TRUE)
@@ -308,7 +347,8 @@ lines <- c(lines, "  },")
 
 lines <- c(lines, '  "datasets": {')
 lines <- c(lines, paste0('    "y_general": ', json_vec(y_general), ","))
-lines <- c(lines, paste0('    "y_positive": ', json_vec(y_positive)))
+lines <- c(lines, paste0('    "y_positive": ', json_vec(y_positive), ","))
+lines <- c(lines, paste0('    "y_gamma_outlier": ', json_vec(y_gamma_outlier)))
 lines <- c(lines, "  }")
 lines <- c(lines, "}")
 

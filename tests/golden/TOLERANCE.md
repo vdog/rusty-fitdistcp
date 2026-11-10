@@ -425,3 +425,154 @@ canonical, consolidated version.
   simulation uses a fixed seed. Re-running the suite yields identical results.
 - **Fail-closed.** A tolerance breach fails the test with the actual/expected
   values and the computed tolerance printed.
+
+---
+
+## 7. Monotonicity guard (Phase A, Issue 4)
+
+This section documents a **deliberate Rust-only divergence** from the reference
+`fitdistcp` package, introduced in Phase A of
+[`plans/phase1-remaining-fixes-plan.md`](../../plans/phase1-remaining-fixes-plan.md).
+
+### 7.1 What the guard does
+
+[`enforce_monotone_quantiles()`](../crates/fitdistcp-core/src/models/numerical.rs)
+performs a **running-max pass** over a CP quantile vector `q` (ordered by
+increasing probability `p`): every element that would decrease relative to the
+running maximum is raised to that maximum. It returns the monotone vector plus a
+`clamped` flag that is `true` when at least one element was raised.
+
+It is applied in the binding-facing CP paths only:
+
+- [`predict_gev()`](../crates/fitdistcp-core/src/api.rs) — **after** the
+  `fixgevrange` support clamp and the `ml_max`/`ml_min` fallback.
+- [`predict_gpd()`](../crates/fitdistcp-core/src/api.rs) — **after** the DMGS CP
+  quantiles are computed (and only on the finite DMGS branch).
+
+The `clamped` flag is surfaced to callers as the `cp_monotone_clamped` field on
+[`FitResult`](../crates/fitdistcp-core/src/api.rs) and in both bindings' return
+dicts (Python `cp_monotone_clamped`, R `cp_monotone_clamped`).
+
+### 7.2 Why it is a divergence
+
+The reference package does **not** sort or clamp its CP quantiles. Its
+`optim`-based fit simply avoids the degenerate region where the first-order DMGS
+expansion produces a non-monotone curve. The Rust multi-start optimizer can still
+land near that region at small `n`, so the guard restores the non-decreasing
+invariant that quantiles must satisfy by definition (e.g. a negative median or a
+decreasing 1-in-100 return level is not a valid quantile curve).
+
+### 7.3 How the golden cross-check still runs unguarded
+
+The guard is applied **only** in the binding-facing `predict_gev` /
+`predict_gpd` entry points. The golden harnesses that compare against the
+reference values can therefore still exercise the **unguarded** DMGS path where
+the reference values are the target:
+
+- The generic [`predict()`](../crates/fitdistcp-core/src/api.rs) DMGS path does
+  **not** apply the guard (`cp_monotone_clamped` is always `false` there).
+- The analytic closed-form models (`norm`, `lnorm`, `expon`) and the `_p1` /
+  `_p12` GEV paths do **not** apply the guard.
+- A harness that needs the raw, unguarded CP quantiles should call the DMGS
+  integrator directly (or the generic `predict`) rather than `predict_gev` /
+  `predict_gpd`.
+
+When a fixture records the reference's (unguarded) CP quantiles and the Rust
+value is produced by `predict_gev` / `predict_gpd`, the harness must account for
+the guard: either assert the Rust result is non-decreasing (the guard's
+invariant) or compare on the unguarded path. The `cp_monotone_clamped` flag makes
+this explicit — a `true` value means the returned CP quantiles were clamped and
+will differ from the reference's raw values wherever the reference curve was
+non-monotone.
+
+### 7.4 Unit coverage
+
+The running-max pass is unit-tested in
+[`models/numerical.rs`](../crates/fitdistcp-core/src/models/numerical.rs) for the
+three canonical cases: already-monotone input (flag `false`), a single inversion
+(flag `true`, corrected), and all-equal input (flag `false`).
+
+---
+
+## 8. Calibration experiment and hail-region divergence (Phase C)
+
+This section records the **post-fix** headline metrics from the Phase-1
+numerical-issues report, reproduced by two fixed-seed harnesses added in Phase C
+of [`plans/phase1-remaining-fixes-plan.md`](../../plans/phase1-remaining-fixes-plan.md).
+Both harnesses are ordinary `cargo test` integration tests (no R/Python/network
+at test time) and are deterministic for their fixed seeds.
+
+### 8.1 Calibration experiment
+
+Harness: [`crates/fitdistcp-core/tests/calibration_experiment.rs`](../crates/fitdistcp-core/tests/calibration_experiment.rs).
+
+The harness draws `N_TRIALS = 200` training samples of size `n` from a **true**
+GEV with shape `xi = 0.1` (a heavy upper tail), fits the GEV by MLE, forms the CP
+**1-in-100** predictive quantile (`p = 0.99`), maps it back through the true CDF,
+and reports the **exceedance rate ratio** = realized / nominal, where nominal is
+`1 - p = 0.01`. A ratio of `1.0` is perfectly calibrated; `> 1` means the CP
+1-in-100 quantile is too low (the true tail is exceeded more often than nominal).
+
+| `n`  | pre-fix ratio (report) | post-fix ratio (measured) | realized rate |
+|------|------------------------|---------------------------|---------------|
+| 12   | 2.35x                  | **2.15x**                 | 0.02150       |
+| 20   | 1.89x                  | **1.64x**                 | 0.01638       |
+| 40   | 0.91x                  | **1.12x**                 | 0.01118       |
+
+**Result.** At the small sample sizes where the defect was reported (`n = 12`,
+`n = 20`) the post-fix ratio is **strictly closer to nominal** than the pre-fix
+reference value (2.15x < 2.35x, 1.64x < 1.89x). At `n = 40` the ratio is near
+nominal (1.12x).
+
+**Known limitation (documented residual).** The post-fix ratios are **not**
+within a tight band of nominal at small `n`: the CP 1-in-100 quantile is still
+somewhat under-estimated at `n = 12` and `n = 20`. This is a **known limitation**
+of the first-order DMGS expansion in the extreme tail at small `n` — the Phase A
+monotonicity/support guard restores the *validity* of the quantile curve (monotone,
+within support) but does not remove the expansion's small-`n` tail bias. The
+harness therefore asserts a documented **ceiling** (`RATIO_CEILING = 3.0`) rather
+than a tight tolerance, plus the strict small-`n` improvement over the pre-fix
+values. The residual is Monte-Carlo-limited: the binomial standard error of the
+realized rate at `p = 0.01` over 200 trials is `sqrt(0.01·0.99/200) ≈ 0.0070`,
+i.e. a ratio standard error of `≈ 0.70`.
+
+### 8.2 Hail-region divergence
+
+Harness: [`crates/fitdistcp-core/tests/hail_region_divergence.rs`](../crates/fitdistcp-core/tests/hail_region_divergence.rs).
+
+The real hail data is **not** in the repository, so the harness uses a
+**synthetic surrogate** generator ([`synthetic_hail_regions`](../crates/fitdistcp-core/tests/hail_region_divergence.rs),
+fixed seed) that reproduces the short-record, zero-inflated shape of the real
+MESH / hail-report corpora: each region is a short (n = 10-40) series of annual
+maxima with a large fraction of zero years, dropped before fitting (the reference
+fits GEV on the **non-zero years** only). For each region the harness fits the
+GEV, forms the CP 1-in-100 return level, and counts the CP-vs-MLE relative
+divergences (`> 1%`, `> 10%`) and non-finite CP return levels.
+
+| Corpus (synthetic surrogate, 2000 regions) | `> 1%` | `> 10%` | non-finite |
+|--------------------------------------------|--------|---------|------------|
+| measured (post-fix)                        | 1063 (57.2%) | 1017 | **0** |
+| pre-fix reference (real MESH)              | 39.1%  | 794     | 121        |
+| pre-fix reference (real hail reports)      | 18.9%  | 329     | 42         |
+
+**Result.** The post-fix **non-finite count is zero** — the Phase 3
+`valid_params` guard rejects the degenerate `scale -> 0` fit that produced the
+pre-fix NaNs (up to 121 regions). The divergence counts are recorded as a
+reproducible regression baseline.
+
+**Known limitation (documented residual).** The synthetic-surrogate divergence
+percentages are **not** directly comparable to the real-data pre-fix percentages:
+the surrogate's short-record / zero-inflation parameters are a modelling choice,
+not the real corpus, so the absolute counts differ. The harness therefore asserts
+only the **structural** invariants (non-finite count is zero; `> 10%` count does
+not exceed the `> 1%` count; counts do not exceed the fitted-region count) and
+records the counts as a baseline. **The real-data counts must be re-run by the
+reporter** against the actual MESH / hail-report corpora to confirm the headline
+improvement.
+
+### 8.3 Verification commands
+
+```text
+docker compose run --rm dev cargo test -p fitdistcp-core --test calibration_experiment -- --nocapture
+docker compose run --rm dev cargo test -p fitdistcp-core --test hail_region_divergence -- --nocapture
+```

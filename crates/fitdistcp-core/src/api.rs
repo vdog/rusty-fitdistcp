@@ -127,6 +127,16 @@ pub struct FitResult {
     /// The starting point that produced the winning MLE candidate (Phase 3,
     /// Issue 3). Propagated from [`MleFit::start`] for diagnostics.
     pub start: Vec<f64>,
+    /// `true` when the CP quantile monotonicity guard fired (Phase A, Issue 4).
+    ///
+    /// The guard ([`crate::models::numerical::enforce_monotone_quantiles`]) is a
+    /// **deliberate Rust-only divergence** from the reference: it raises any CP
+    /// quantile that would decrease in `p` to the running maximum, restoring the
+    /// non-decreasing invariant that the DMGS expansion can violate at small `n`.
+    /// This flag lets callers detect that the returned CP quantiles were clamped
+    /// rather than produced directly by the expansion. It is `false` for models
+    /// that do not apply the guard (e.g. the analytic closed-form models).
+    pub cp_monotone_clamped: bool,
 }
 
 impl FitResult {
@@ -295,6 +305,8 @@ where
         convergence: mle.convergence,
         small_n: mle.small_n,
         start: mle.start.clone(),
+        // The analytic closed-form models do not apply the monotonicity guard.
+        cp_monotone_clamped: false,
     }
 }
 
@@ -380,6 +392,8 @@ pub fn predict<M: crate::dmgs::DmgsModel + Copy + Sync>(
         convergence: mle.convergence,
         small_n: mle.small_n,
         start: mle.start.clone(),
+        // The generic DMGS path does not apply the monotonicity guard.
+        cp_monotone_clamped: false,
     }
 }
 
@@ -442,6 +456,8 @@ pub fn predict_gev(
     let shape = mle.ml_params[2];
     let revert2ml = model.revert2ml(shape);
 
+    // Tracks whether the CP-quantile monotonicity guard fired (Phase A, Issue 4).
+    let mut cp_monotone_clamped = false;
     let (cp_pdf, cp_quantiles) = if revert2ml {
         // Reference: when |shape| >= 1 the CP output reverts to the MLE output.
         (ml_pdf.clone(), ml_quantiles.clone())
@@ -479,6 +495,18 @@ pub fn predict_gev(
             })
             .collect();
 
+        // Phase A (Issue 4): enforce monotone CP quantiles (non-decreasing in
+        // `p`). The DMGS expansion can produce a non-monotone curve at small n
+        // (e.g. a negative median or a decreasing 1-in-100 return level). The
+        // direction is taken from `req.p`, so a descending `p` (as in the
+        // reliability simulation) yields a correctly oriented non-increasing
+        // curve. This is a deliberate Rust-only divergence from the reference
+        // (which does not sort); see `enforce_monotone_quantiles_for_p` and
+        // `tests/golden/TOLERANCE.md`.
+        let (cp_q, clamped) =
+            crate::models::numerical::enforce_monotone_quantiles_for_p(&cp_q, &req.p);
+        cp_monotone_clamped = clamped;
+
         (cp_d, cp_q)
     };
 
@@ -514,6 +542,7 @@ pub fn predict_gev(
         convergence: mle.convergence,
         small_n: mle.small_n,
         start: mle.start.clone(),
+        cp_monotone_clamped,
     }
 }
 
@@ -570,12 +599,25 @@ pub fn predict_gpd(
     // reference's `revert2ml` guard fires OR the expansion produced a non-finite
     // value (the non-finite-`lddi` guard: `invert` failed, so `cp_quantiles`
     // returned NaN).
+    //
+    // Tracks whether the CP-quantile monotonicity guard fired (Phase A, Issue 4).
+    let mut cp_monotone_clamped = false;
     let (cp_pdf, cp_quantiles) = if revert2ml {
         (ml_pdf.clone(), ml_quantiles.clone())
     } else {
         let cp_q = integ.cp_quantiles(&mle.ml_params, &req.y, &req.p);
         let cp_d = integ.cp_pdf(&mle.ml_params, &req.y, &req.x);
         if cp_q.iter().all(|v| v.is_finite()) && cp_d.iter().all(|v| v.is_finite()) {
+            // Phase A (Issue 4): enforce monotone CP quantiles (non-decreasing
+            // in `p`). The DMGS expansion can produce a non-monotone curve at
+            // small n. The direction is taken from `req.p`, so a descending `p`
+            // yields a correctly oriented non-increasing curve. This is a
+            // deliberate Rust-only divergence from the reference (which does not
+            // sort); see `enforce_monotone_quantiles_for_p` and
+            // `tests/golden/TOLERANCE.md`.
+            let (cp_q, clamped) =
+                crate::models::numerical::enforce_monotone_quantiles_for_p(&cp_q, &req.p);
+            cp_monotone_clamped = clamped;
             (cp_d, cp_q)
         } else {
             // Non-finite `lddi` (singular/non-finite observed information): the
@@ -617,6 +659,7 @@ pub fn predict_gpd(
         convergence: mle.convergence,
         small_n: mle.small_n,
         start: mle.start.clone(),
+        cp_monotone_clamped,
     }
 }
 
@@ -697,6 +740,8 @@ pub fn predict_gamma(req: &PredictionRequest, init: &[f64]) -> FitResult {
         convergence: mle.convergence,
         small_n: mle.small_n,
         start: mle.start.clone(),
+        // The gamma CP path does not apply the monotonicity guard.
+        cp_monotone_clamped: false,
     }
 }
 
@@ -966,6 +1011,8 @@ pub fn predict_gev_p1(
         convergence: mle.convergence,
         small_n: mle.small_n,
         start: mle.start.clone(),
+        // The genextreme_p12 CP path does not apply the monotonicity guard.
+        cp_monotone_clamped: false,
     }
 }
 
@@ -1049,6 +1096,8 @@ pub fn predict_gev_p12(
         convergence: mle.convergence,
         small_n: mle.small_n,
         start: mle.start.clone(),
+        // The genextreme_p1 CP path does not apply the monotonicity guard.
+        cp_monotone_clamped: false,
     }
 }
 
@@ -1189,6 +1238,7 @@ mod tests {
             convergence: Convergence::Converged,
             small_n: false,
             start: vec![0.0, 1.0],
+            cp_monotone_clamped: false,
         };
         assert!(result.is_converged());
         assert_eq!(result.ml_params.len(), 2);

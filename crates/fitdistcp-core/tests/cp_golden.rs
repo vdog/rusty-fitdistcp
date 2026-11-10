@@ -536,6 +536,74 @@ fn golden_gamma_weibull_residuals() {
     }
 }
 
+/// Phase D (Issue 5): the gamma ~90% outlier case.
+///
+/// The report's headline gamma outlier: a heavy-tailed positive dataset that
+/// drives the gamma MLE to a small shape / large scale, the regime where the
+/// pre-Phase-5 `(shape, rate)` DMGS expansion diverged from the reference by
+/// ~90%. Phase 5 computes the expansion in the reference's `(shape, scale)`
+/// parameterization via [`GammaScale`], which drops the residual to the DMGS
+/// tolerance. This asserts the residual is below `GAMMA_RTOL`.
+#[test]
+fn golden_gamma_outlier_residual() {
+    let root = load_fixture();
+    let models = root.get("models");
+    let datasets = root.get("datasets");
+    let x_grid = root.get("x_grid").as_f64_vec();
+    let y = datasets.get("y_gamma_outlier").as_f64_vec();
+
+    let m = models.get("gamma_outlier");
+    let ref_params = m.get("params").as_f64_vec(); // [shape, scale]
+    let r = fit(&Gamma, &y, &[1.0, 1.0]);
+    // The Rust MLE (shape, rate) should match the reference (shape, scale).
+    assert_close(
+        r.ml_params[0],
+        ref_params[0],
+        1e-4,
+        1e-6,
+        "gamma_outlier.shape",
+    );
+    assert_close(
+        1.0 / r.ml_params[1],
+        ref_params[1],
+        1e-4,
+        1e-6,
+        "gamma_outlier.scale",
+    );
+
+    // Phase 5: compute the DMGS expansion in the reference's (shape, scale)
+    // parameterization (convert scale = 1/rate at the boundary).
+    let scale_params = [r.ml_params[0], 1.0 / r.ml_params[1]];
+    let cp_pdf = dmgs_cp_pdf(GammaScale, &scale_params, &y, &x_grid);
+    let expected = m.get("cp_pdf").as_f64_vec();
+    let max_rel = cp_pdf
+        .iter()
+        .zip(expected.iter())
+        .map(|(a, e)| (a - e).abs() / e.abs().max(1e-300))
+        .fold(0.0_f64, f64::max);
+    // The pre-Phase-5 (shape, rate) divergence was ~90% on this outlier case;
+    // the (shape, scale) expansion drops it below GAMMA_RTOL.
+    assert!(
+        max_rel < GAMMA_RTOL,
+        "gamma_outlier CP pdf max relative residual {max_rel:.3e} exceeds GAMMA_RTOL {GAMMA_RTOL:.1e}"
+    );
+
+    // The reference emits no CP quantiles for the gamma; assert the fixture is
+    // null so a future change is noticed.
+    let ref_q = m.get("cp_quantiles").as_f64_vec_opt();
+    assert!(
+        ref_q.iter().all(|v| v.is_nan()),
+        "gamma_outlier.cp_quantiles fixture unexpectedly non-null"
+    );
+
+    eprintln!(
+        "gamma_outlier: shape = {:.6}, scale = {:.6}, max_rel = {:.3e}",
+        r.ml_params[0],
+        1.0 / r.ml_params[1],
+        max_rel
+    );
+}
+
 #[test]
 fn golden_cp_dmgs_models() {
     let root = load_fixture();

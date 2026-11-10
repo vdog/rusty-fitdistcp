@@ -427,6 +427,8 @@ fn base_dict<'py>(py: Python<'py>, r: &FitResult) -> PyResult<Bound<'py, PyDict>
     d.set_item("log_scores", r.log_scores.clone())?;
     d.set_item("convergence", convergence_str(r))?;
     d.set_item("small_n", r.small_n)?;
+    // Phase A (Issue 4): whether the CP-quantile monotonicity guard fired.
+    d.set_item("cp_monotone_clamped", r.cp_monotone_clamped)?;
     Ok(d)
 }
 

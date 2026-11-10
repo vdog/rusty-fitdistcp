@@ -363,6 +363,74 @@ fn golden_gpd_dollar_scale_fits_without_nan() {
     );
 }
 
+/// Phase B (Issue 2): the report's exact dollar repro vector.
+///
+/// The reference R 0.2.3 errors on the raw scale (the optimizer's Hessian is
+/// singular), so the fixture records the reference's `/1e6`-scaled result and
+/// the expected finite Rust raw-scale result (the scaled result multiplied back
+/// by 1e6, by scale-equivariance). This asserts the Rust `predict_gpd` fits the
+/// raw scale directly and reproduces the finite raw-scale result.
+#[test]
+fn golden_gpd_dollar_repro_vector() {
+    let root = load_fixture();
+    let repro = root.get("repro");
+    let datasets = root.get("datasets");
+    let p_grid = root.get("p_grid").as_f64_vec();
+
+    let y = datasets.get("repro_dollar").as_f64_vec();
+    let raw = repro.get("rust_raw_expected");
+    let ref_params = raw.get("params").as_f64_vec();
+    let ref_setics = raw.get("setics").as_f64_vec();
+
+    // The `setics`-derived init must match the reference `gpd_k1_setics` (scaled).
+    let init = GenPareto.setics(&y, &[0.0, 0.0]);
+    assert_close(init[0], ref_setics[0], 1e-6, 1e-6, "repro.setics.scale");
+    assert_close(init[1], ref_setics[1], 1e-12, 1e-12, "repro.setics.shape");
+
+    let req = make_request(y.clone(), p_grid.clone());
+    let r = predict_gpd(GenPareto, &req, &init);
+
+    // (1) No NaN: the whole point of the fix.
+    assert!(
+        r.ml_params.iter().all(|v| v.is_finite()),
+        "repro ml_params not finite: {:?}",
+        r.ml_params
+    );
+    assert!(
+        r.cp_quantiles.iter().all(|v| v.is_finite()),
+        "repro cp_quantiles not finite: {:?}",
+        r.cp_quantiles
+    );
+
+    // (2) The raw-scale result matches the expected finite raw-scale result.
+    compare_vec(
+        &r.ml_params,
+        &ref_params,
+        OPT_RTOL,
+        OPT_ATOL,
+        "repro.ml_params",
+    );
+    compare_vec(
+        &r.cp_quantiles,
+        &raw.get("cp_quantiles").as_f64_vec(),
+        GPD_RTOL,
+        GPD_ATOL,
+        "repro.cp_quantiles",
+    );
+    compare_vec(
+        &r.ml_quantiles,
+        &raw.get("ml_quantiles").as_f64_vec(),
+        GPD_RTOL,
+        GPD_ATOL,
+        "repro.ml_quantiles",
+    );
+
+    eprintln!(
+        "gpd repro: setics = [{:.6e}, {:.6e}], ml_params = [{:.6e}, {:.6e}]",
+        init[0], init[1], r.ml_params[0], r.ml_params[1]
+    );
+}
+
 /// The old hard-coded `init = [1.0, 0.0]` is the Phase 2 defect: on dollar-scale
 /// data it started the optimizer many orders of magnitude below the data's
 /// scale. As of **Phase 3** the core's multi-start strategy adds the

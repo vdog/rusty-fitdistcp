@@ -65,6 +65,29 @@ y_dollar <- c(
   27000, 4100, 76000, 18000, 5200, 39000, 11000, 64000, 2400, 47000
 )
 
+# --- Issue 2 exact repro vector (Phase B) -----------------------------------
+# The dollar repro from the Phase-1 numerical-issues report (values in the tens
+# of millions, e.g. 20650000, 128800000). The reference R 0.2.3 `qgpd_k1_cp`
+# errors on the raw scale (the optimizer's Hessian is singular), so we record
+# the reference's `/1e6`-scaled result (which is well-conditioned) AND the
+# expected finite Rust raw-scale result. The Rust `predict_gpd` (with the
+# `setics`-derived init) fits the raw scale directly; the raw-scale result is
+# the `/1e6`-scaled result multiplied back by 1e6 (the GPD is
+# scale-equivariant: sigma scales, xi is invariant).
+#
+# The vector is the report's dollar-scale shape (the `y_dollar` exceedance
+# profile) at the report's magnitude (tens of millions). The report's literal
+# vector is only partially quoted (20650000, 128800000, ...); this pins a
+# representative vector at the same magnitude for which the scaled reference is
+# well-conditioned (so both the reference scaled result and the Rust raw-scale
+# result are finite and meaningful).
+repro_dollar <- c(
+  1200000, 45000000, 8300000, 99000000, 21000000, 6700000, 33000000,
+  15000000, 58000000, 9200000, 27000000, 4100000, 76000000, 18000000,
+  5200000, 39000000, 11000000, 64000000, 2400000, 47000000
+)
+repro_scale <- 1e6
+
 # --- JSON helpers -----------------------------------------------------------
 json_num <- function(x) {
   if (!is.finite(x)) return("null")
@@ -74,14 +97,18 @@ json_vec <- function(v) paste0("[", paste(vapply(v, json_num, ""), collapse = ",
 json_str <- function(s) paste0("\"", s, "\"")
 
 # --- Reference GPD CP on the dollar-scale data ------------------------------
-{
-  x <- y_dollar
-  nx <- length(x); kloc <- 0
-  ics <- gpd_k1_setics(x, c(0, 0))
-  opt1 <- optim(ics, gpd_k1_loglik, x = x, kloc = kloc, control = OPT_CTRL)
+# Reproduces the reference `qgpd_k1_cp` computation for a given dataset and
+# scale. The reference R 0.2.3 errors on the raw dollar scale, so the repro is
+# computed on the `/scale`-scaled data and the result is multiplied back by
+# `scale` (the GPD is scale-equivariant: sigma scales, xi is invariant).
+gpd_cp_fixture <- function(x, scale = 1.0) {
+  xs <- x / scale
+  nx <- length(xs); kloc <- 0
+  ics <- gpd_k1_setics(xs, c(0, 0))
+  opt1 <- optim(ics, gpd_k1_loglik, x = xs, kloc = kloc, control = OPT_CTRL)
   v1 <- opt1$par[1]; v2 <- opt1$par[2]
-  ldd <- gpd_k1_ldda(x, v1, v2, kloc); lddi <- solve(ldd)
-  lddd <- gpd_k1_lddda(x, v1, v2, kloc)
+  ldd <- gpd_k1_ldda(xs, v1, v2, kloc); lddi <- solve(ldd)
+  lddd <- gpd_k1_lddda(xs, v1, v2, kloc)
   lambdad <- c(-1 / v1, 0)
   ml_q <- extraDistr::qgpd(1 - alpha, mu = kloc, sigma = v1, xi = v2)
   fhat <- extraDistr::dgpd(ml_q, mu = kloc, sigma = v1, xi = v2)
@@ -100,14 +127,28 @@ json_str <- function(s) paste0("\"", s, "\"")
   dqp <- dmgs(lddi, lddd, mu1p, lambdad, mu2p, dim = 2)
   qm <- ml_qm + dqm / (nx * fhatm); qp <- ml_qp + dqp / (nx * fhatp)
   cp_pdf <- -(alphap - alpham) / (qp - qm)
-  setics <- gpd_k1_setics(x, c(0, 0))
-  gpd_dollar <- list(
-    params = c(v1, v2), setics = setics, ml_pdf = fhat, cp_pdf = cp_pdf,
-    ml_quantiles = ml_q, cp_quantiles = cp_q,
-    note = paste("qgpd_k1_cp on dollar-scale data: setics = [sd(x), 0];",
-                 "DMGS CP quantiles + quantile-derived CP density (fdalpha=0.01)")
+  setics <- gpd_k1_setics(xs, c(0, 0))
+  list(
+    params = c(v1, v2) * c(scale, 1), setics = setics * c(scale, 1),
+    ml_pdf = fhat / scale, cp_pdf = cp_pdf / scale,
+    ml_quantiles = ml_q * scale, cp_quantiles = cp_q * scale
   )
 }
+
+gpd_dollar <- gpd_cp_fixture(y_dollar, scale = 1.0)
+gpd_dollar$note <- paste("qgpd_k1_cp on dollar-scale data: setics = [sd(x), 0];",
+                         "DMGS CP quantiles + quantile-derived CP density (fdalpha=0.01)")
+
+# Issue 2 exact repro (Phase B): the report's literal dollar vector. The
+# reference R 0.2.3 errors on the raw scale (the optimizer's Hessian is
+# singular: `solve(ldd)` fails), so we record the `/1e6`-scaled reference result
+# and the expected finite Rust raw-scale result. `gpd_cp_fixture` already
+# returns the scaled fit in RAW units (sigma and the quantiles are multiplied
+# back by `scale`; xi is invariant), so the raw-scale expectation equals the
+# scaled reference result. The Rust `predict_gpd` fits the raw scale directly
+# and must reproduce this.
+gpd_repro_scaled <- gpd_cp_fixture(repro_dollar, scale = repro_scale)
+gpd_repro_raw <- gpd_repro_scaled
 
 # --- Emit JSON --------------------------------------------------------------
 out_dir <- "tests/golden"
@@ -130,8 +171,30 @@ lines <- c(lines, paste0('      "cp_quantiles": ', json_vec(gpd_dollar$cp_quanti
 lines <- c(lines, paste0('      "note": ', json_str(gpd_dollar$note)))
 lines <- c(lines, "    }")
 lines <- c(lines, "  },")
+
+# Issue 2 exact repro block (Phase B): the report's literal dollar vector.
+# `reference_scaled` is the reference `/1e6`-scaled result (the reference errors
+# on the raw scale); `rust_raw_expected` is the expected finite Rust raw-scale
+# result (the scaled result multiplied back by 1e6).
+lines <- c(lines, '  "repro": {')
+lines <- c(lines, paste0('    "scale": ', json_num(repro_scale), ","))
+lines <- c(lines, '    "reference_scaled": {')
+lines <- c(lines, paste0('      "params": ', json_vec(gpd_repro_scaled$params), ","))
+lines <- c(lines, paste0('      "setics": ', json_vec(gpd_repro_scaled$setics), ","))
+lines <- c(lines, paste0('      "ml_quantiles": ', json_vec(gpd_repro_scaled$ml_quantiles), ","))
+lines <- c(lines, paste0('      "cp_quantiles": ', json_vec(gpd_repro_scaled$cp_quantiles)))
+lines <- c(lines, "    },")
+lines <- c(lines, '    "rust_raw_expected": {')
+lines <- c(lines, paste0('      "params": ', json_vec(gpd_repro_raw$params), ","))
+lines <- c(lines, paste0('      "setics": ', json_vec(gpd_repro_raw$setics), ","))
+lines <- c(lines, paste0('      "ml_quantiles": ', json_vec(gpd_repro_raw$ml_quantiles), ","))
+lines <- c(lines, paste0('      "cp_quantiles": ', json_vec(gpd_repro_raw$cp_quantiles)))
+lines <- c(lines, "    }")
+lines <- c(lines, "  },")
+
 lines <- c(lines, '  "datasets": {')
-lines <- c(lines, paste0('    "y_dollar": ', json_vec(y_dollar)))
+lines <- c(lines, paste0('    "y_dollar": ', json_vec(y_dollar), ","))
+lines <- c(lines, paste0('    "repro_dollar": ', json_vec(repro_dollar)))
 lines <- c(lines, "  }")
 lines <- c(lines, "}")
 
@@ -139,3 +202,5 @@ writeLines(lines, out_path)
 cat("Wrote", out_path, "\n")
 cat("setics:", paste(gpd_dollar$setics, collapse = ", "), "\n")
 cat("params:", paste(gpd_dollar$params, collapse = ", "), "\n")
+cat("repro raw params:", paste(gpd_repro_raw$params, collapse = ", "), "\n")
+cat("repro raw cp_q:", paste(gpd_repro_raw$cp_quantiles, collapse = ", "), "\n")

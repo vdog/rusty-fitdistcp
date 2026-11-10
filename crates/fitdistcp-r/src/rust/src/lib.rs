@@ -443,6 +443,8 @@ fn q_cp_list(r: &FitResult, cp_method: &str, extra: Vec<(&str, Robj)>) -> List {
         "ml_mean",
         "cp_mean",
         "cp_method",
+        // Phase A (Issue 4): whether the CP-quantile monotonicity guard fired.
+        "cp_monotone_clamped",
     ];
     let mut values: Vec<Robj> = vec![
         doubles(r.ml_params.clone()).into(),
@@ -459,6 +461,7 @@ fn q_cp_list(r: &FitResult, cp_method: &str, extra: Vec<(&str, Robj)>) -> List {
         f64::NAN.into(),
         f64::NAN.into(),
         cp_method.into(),
+        r.cp_monotone_clamped.into(),
     ];
     for (n, v) in extra {
         names.push(n);
@@ -469,13 +472,22 @@ fn q_cp_list(r: &FitResult, cp_method: &str, extra: Vec<(&str, Robj)>) -> List {
 
 /// Build the reference `d***_cp` return list.
 fn d_cp_list(r: &FitResult, cp_method: &str, extra: Vec<(&str, Robj)>) -> List {
-    let mut names = vec!["ml_params", "ml_pdf", "cp_pdf", "ru_pdf", "cp_method"];
+    let mut names = vec![
+        "ml_params",
+        "ml_pdf",
+        "cp_pdf",
+        "ru_pdf",
+        "cp_method",
+        // Phase A (Issue 4): whether the CP-quantile monotonicity guard fired.
+        "cp_monotone_clamped",
+    ];
     let mut values: Vec<Robj> = vec![
         doubles(r.ml_params.clone()).into(),
         doubles(r.ml_pdf.clone()).into(),
         doubles(r.cp_pdf.clone()).into(),
         RUST_NOT_SELECTED.into(),
         cp_method.into(),
+        r.cp_monotone_clamped.into(),
     ];
     for (n, v) in extra {
         names.push(n);
@@ -497,13 +509,22 @@ fn p_cp_list(
     cp_method: &str,
     extra: Vec<(&str, Robj)>,
 ) -> List {
-    let mut names = vec!["ml_params", "ml_cdf", "cp_cdf", "ru_cdf", "cp_method"];
+    let mut names = vec![
+        "ml_params",
+        "ml_cdf",
+        "cp_cdf",
+        "ru_cdf",
+        "cp_method",
+        // Phase A (Issue 4): whether the CP-quantile monotonicity guard fired.
+        "cp_monotone_clamped",
+    ];
     let mut values: Vec<Robj> = vec![
         doubles(r.ml_params.clone()).into(),
         doubles(ml_cdf).into(),
         doubles(cp_cdf).into(),
         RUST_NOT_SELECTED.into(),
         cp_method.into(),
+        r.cp_monotone_clamped.into(),
     ];
     for (n, v) in extra {
         names.push(n);
@@ -520,6 +541,8 @@ fn r_cp_list(r: &FitResult, cp_method: &str, extra: Vec<(&str, Robj)>) -> List {
         "cp_deviates",
         "ru_deviates",
         "cp_method",
+        // Phase A (Issue 4): whether the CP-quantile monotonicity guard fired.
+        "cp_monotone_clamped",
     ];
     let mut values: Vec<Robj> = vec![
         doubles(r.ml_params.clone()).into(),
@@ -527,6 +550,7 @@ fn r_cp_list(r: &FitResult, cp_method: &str, extra: Vec<(&str, Robj)>) -> List {
         doubles(r.cp_quantiles.clone()).into(),
         RUST_NOT_SELECTED.into(),
         cp_method.into(),
+        r.cp_monotone_clamped.into(),
     ];
     for (n, v) in extra {
         names.push(n);

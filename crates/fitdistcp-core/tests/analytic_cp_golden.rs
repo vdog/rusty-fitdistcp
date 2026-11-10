@@ -43,6 +43,15 @@ use fitdistcp_core::api::{predict_analytic, AnalyticModel, PredictionRequest};
 const RTOL: f64 = 1e-8;
 const ATOL: f64 = 1e-10;
 
+/// Looser tolerance for the Issue 1 repro at the extreme tail (`p = 0.99,
+/// 0.996`). The `norm` CP quantile is a Student-t quantile with `df = n - 1`;
+/// at these tail probabilities the `student_t_quantile` bisection precision
+/// (and the reference `qt`'s own tail accuracy) dominates, giving a residual
+/// of ~1e-6 rather than the ~1e-8 seen at `p <= 0.9`. This is a documented,
+/// expected difference (see `tests/golden/TOLERANCE.md` §3.12).
+const REPRO_RTOL: f64 = 1e-5;
+const REPRO_ATOL: f64 = 1e-8;
+
 /// Looser tolerance for the DMGS cross-check: the DMGS expansion is a
 /// first-order approximation of the exact integral, so it differs by the
 /// `O(1/n)` truncation error. This is a documented, expected difference.
@@ -318,6 +327,55 @@ fn check_model(
     let req = make_request(y.to_vec(), p.to_vec());
     let r = predict_analytic(model, &req, init, false);
     compare_vec(&r.cp_quantiles, ref_cp, RTOL, ATOL, label);
+}
+
+/// Phase B (Issue 1): the report's exact repro vector at `p = 0.99, 0.996`.
+///
+/// The report observed the `lnorm` CP quantile diverging from the reference at
+/// these tail levels. This pins the reference's own analytic result for the
+/// literal repro vector, so the reported case is regression-tested.
+#[test]
+fn golden_analytic_cp_repro_vector() {
+    let root = load_fixture();
+    let repro = root.get("repro");
+    let p = repro.get("p").as_f64_vec();
+    let y = root.get("datasets").get("repro_y").as_f64_vec();
+
+    // The extreme-tail repro uses the documented looser tolerance (see
+    // `REPRO_RTOL`): the Student-t bisection precision dominates at p = 0.99,
+    // 0.996.
+    let check = |model: AnalyticModel, init: &[f64], ref_cp: &[f64], label: &str| {
+        let req = make_request(y.clone(), p.clone());
+        let r = predict_analytic(model, &req, init, false);
+        compare_vec(&r.cp_quantiles, ref_cp, REPRO_RTOL, REPRO_ATOL, label);
+    };
+
+    // norm: init [mean, sd].
+    let norm = repro.get("repro_norm");
+    check(
+        AnalyticModel::Norm,
+        &[6.8, 6.0],
+        &norm.get("cp_quantiles").as_f64_vec(),
+        "repro.norm.cp_q",
+    );
+
+    // lnorm: init [meanlog, sdlog].
+    let lnorm = repro.get("repro_lnorm");
+    check(
+        AnalyticModel::Lnorm,
+        &[1.65, 0.68],
+        &lnorm.get("cp_quantiles").as_f64_vec(),
+        "repro.lnorm.cp_q",
+    );
+
+    // expon: init [rate].
+    let expon = repro.get("repro_expon");
+    check(
+        AnalyticModel::Expon,
+        &[0.147],
+        &expon.get("cp_quantiles").as_f64_vec(),
+        "repro.expon.cp_q",
+    );
 }
 
 #[test]

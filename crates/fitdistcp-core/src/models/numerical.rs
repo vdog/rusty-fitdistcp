@@ -391,6 +391,101 @@ where
     out
 }
 
+/// Enforce non-decreasing (monotone) quantiles via a running-max pass.
+///
+/// Given a vector of predictive quantiles `q` (assumed to be ordered by
+/// increasing probability `p`), returns a new vector in which every element is
+/// the running maximum of the prefix, together with a `clamped` flag that is
+/// `true` when at least one element was raised (i.e. the input was not already
+/// non-decreasing).
+///
+/// # Why this exists (Phase A, Issue 4)
+///
+/// At small `n` the DMGS calibrated-prior (CP) expansion for the GEV and GPD can
+/// produce a **non-monotone** quantile curve — e.g. a negative median or a
+/// decreasing 1-in-100 return level — because the first-order expansion is only
+/// an approximation and the multi-start MLE can land near a degenerate fit.
+/// Quantiles must be non-decreasing in `p` by definition, so this guard restores
+/// that invariant.
+///
+/// # Deliberate Rust-only divergence
+///
+/// The reference `fitdistcp` package does **not** sort or clamp its CP
+/// quantiles; its `optim`-based fit simply avoids the degenerate region. The
+/// Rust multi-start optimizer can still land near it, so this guard is a
+/// **deliberate divergence** from the reference. It is applied only in the
+/// binding-facing CP paths ([`crate::api::predict_gev`] /
+/// [`crate::api::predict_gpd`]); the golden cross-check against the reference can
+/// still run unguarded where the reference values are the target. See
+/// `tests/golden/TOLERANCE.md` §"Monotonicity guard (Phase A)".
+///
+/// # Behaviour
+///
+/// - Already-monotone input: returned unchanged, `clamped == false`.
+/// - Single inversion: the offending element is raised to the running maximum,
+///   `clamped == true`.
+/// - All-equal input: returned unchanged, `clamped == false` (a constant
+///   sequence is trivially non-decreasing).
+/// - `NaN` elements propagate through the running maximum (a `NaN` comparison is
+///   false, so the running max is retained); callers that need to reject
+///   non-finite quantiles should check separately.
+pub fn enforce_monotone_quantiles(q: &[f64]) -> (Vec<f64>, bool) {
+    let mut out = Vec::with_capacity(q.len());
+    let mut running_max = f64::NEG_INFINITY;
+    let mut clamped = false;
+    for &qi in q {
+        if qi < running_max {
+            // Inversion: raise this element to the running maximum.
+            out.push(running_max);
+            clamped = true;
+        } else {
+            running_max = qi;
+            out.push(qi);
+        }
+    }
+    (out, clamped)
+}
+
+/// Enforce that the quantiles `q` are monotone **in the direction implied by the
+/// probability vector `p`**.
+///
+/// Quantiles are non-decreasing in `p`: if `p` is ascending, `q` must be
+/// non-decreasing; if `p` is descending, `q` must be non-increasing. This wrapper
+/// applies [`enforce_monotone_quantiles`] (a running-max pass) in the correct
+/// direction, so a caller that supplies `p` in either order gets a correctly
+/// oriented monotone curve.
+///
+/// The direction is taken from the first two elements of `p` (a strictly
+/// ascending or descending prefix); ties or a length `< 2` default to ascending.
+/// The returned `clamped` flag is `true` when any element was moved.
+///
+/// # Why direction matters
+///
+/// The reliability simulation (`reltest`) builds `p = 1 - alpha` with `alpha`
+/// ascending, so `p` is **descending** and the quantiles are naturally
+/// non-increasing. A naive running-max pass would collapse that curve to its
+/// first (largest) value. This wrapper reverses the vector, applies the
+/// running-max pass, and reverses back, preserving the correct orientation.
+pub fn enforce_monotone_quantiles_for_p(q: &[f64], p: &[f64]) -> (Vec<f64>, bool) {
+    debug_assert_eq!(q.len(), p.len(), "q and p must have equal length");
+    // Determine the direction from the first strictly-ordered pair in `p`.
+    let ascending = p
+        .windows(2)
+        .find(|w| w[0] != w[1])
+        .map(|w| w[0] < w[1])
+        .unwrap_or(true);
+    if ascending {
+        enforce_monotone_quantiles(q)
+    } else {
+        // Descending `p`: reverse, run the running-max pass, reverse back.
+        let mut rev: Vec<f64> = q.iter().rev().copied().collect();
+        let (mut out, clamped) = enforce_monotone_quantiles(&rev);
+        out.reverse();
+        rev.clear();
+        (out, clamped)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -573,5 +668,84 @@ mod tests {
         assert!(cfg.step_for(0.0) >= DEFAULT_ABS_STEP);
         // Large parameter: step grows with |theta|.
         assert!(cfg.step_for(1.0e6) > cfg.step_for(1.0));
+    }
+
+    #[test]
+    fn monotone_guard_already_monotone_is_unchanged() {
+        // Strictly increasing input: no element is raised, flag is false.
+        let q = [0.5, 1.0, 2.0, 3.5, 10.0];
+        let (out, clamped) = enforce_monotone_quantiles(&q);
+        assert_eq!(out, q);
+        assert!(!clamped, "already-monotone input must not set the flag");
+    }
+
+    #[test]
+    fn monotone_guard_single_inversion_is_corrected() {
+        // One inversion at index 3 (2.0 < 3.5): it is raised to the running max.
+        let q = [0.5, 1.0, 3.5, 2.0, 4.0];
+        let (out, clamped) = enforce_monotone_quantiles(&q);
+        assert_eq!(out, [0.5, 1.0, 3.5, 3.5, 4.0]);
+        assert!(clamped, "an inversion must set the flag");
+        // The result is non-decreasing.
+        assert!(out.windows(2).all(|w| w[0] <= w[1]));
+    }
+
+    #[test]
+    fn monotone_guard_all_equal_is_unchanged() {
+        // A constant sequence is trivially non-decreasing: no clamp.
+        let q = [2.5, 2.5, 2.5, 2.5];
+        let (out, clamped) = enforce_monotone_quantiles(&q);
+        assert_eq!(out, q);
+        assert!(!clamped, "all-equal input must not set the flag");
+    }
+
+    #[test]
+    fn monotone_guard_negative_median_repro_shape() {
+        // Mirrors the Issue 4 repro shape: a negative median followed by a
+        // decreasing tail. The guard raises the median to the running max and
+        // flattens the decreasing tail.
+        let q = [-0.3, -0.1, 0.2, 0.1, 0.05];
+        let (out, clamped) = enforce_monotone_quantiles(&q);
+        assert!(clamped);
+        assert!(out.windows(2).all(|w| w[0] <= w[1]));
+        // The first element (the median) is unchanged; only later inversions move.
+        assert_eq!(out[0], -0.3);
+    }
+
+    #[test]
+    fn monotone_guard_for_p_ascending_matches_running_max() {
+        // Ascending `p`: the direction-aware wrapper is the running-max pass.
+        let p = [0.5, 0.8, 0.9, 0.96, 0.98, 0.99];
+        let q = [1.0, 1.5, 1.4, 2.0, 1.9, 2.5];
+        let (out, clamped) = enforce_monotone_quantiles_for_p(&q, &p);
+        assert!(clamped);
+        assert!(out.windows(2).all(|w| w[0] <= w[1]));
+        assert_eq!(out, [1.0, 1.5, 1.5, 2.0, 2.0, 2.5]);
+    }
+
+    #[test]
+    fn monotone_guard_for_p_descending_is_non_increasing() {
+        // Descending `p` (as in the reliability simulation `p = 1 - alpha`):
+        // the quantiles must be non-increasing, NOT collapsed to the first value.
+        let p = [0.99, 0.95, 0.90, 0.75, 0.50, 0.25, 0.10, 0.05, 0.01];
+        let q = [5.0, 4.0, 4.5, 3.0, 2.0, 1.0, 0.5, 0.6, 0.1];
+        let (out, clamped) = enforce_monotone_quantiles_for_p(&q, &p);
+        assert!(clamped);
+        // Non-increasing in the descending-`p` order.
+        assert!(out.windows(2).all(|w| w[0] >= w[1]));
+        // The first (largest) value is preserved; the inversion at index 2
+        // (4.5 > 4.0) is raised to the running max of the reversed pass (4.5).
+        assert_eq!(out[0], 5.0);
+        assert_eq!(out[2], 4.5);
+        assert_eq!(out, [5.0, 4.5, 4.5, 3.0, 2.0, 1.0, 0.6, 0.6, 0.1]);
+    }
+
+    #[test]
+    fn monotone_guard_for_p_descending_already_monotone_unchanged() {
+        let p = [0.9, 0.5, 0.1];
+        let q = [3.0, 2.0, 1.0];
+        let (out, clamped) = enforce_monotone_quantiles_for_p(&q, &p);
+        assert!(!clamped);
+        assert_eq!(out, q);
     }
 }

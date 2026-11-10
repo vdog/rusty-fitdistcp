@@ -37,7 +37,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use fitdistcp_core::mle::fit;
-use fitdistcp_core::models::GenExtreme;
+use fitdistcp_core::models::{GenExtreme, GenPareto};
 
 /// §7.2 golden tolerance for the log-likelihood (the objective).
 const RTOL: f64 = 1e-8;
@@ -285,6 +285,23 @@ fn load_fixture() -> Json {
     Parser::new(&text).parse_value()
 }
 
+/// Load the Phase D small-n GPD fixture (`gpd_smalln_golden.json`).
+fn load_gpd_smalln_fixture() -> Json {
+    let path: PathBuf = [
+        env!("CARGO_MANIFEST_DIR"),
+        "..",
+        "..",
+        "tests",
+        "golden",
+        "gpd_smalln_golden.json",
+    ]
+    .iter()
+    .collect();
+    let text = std::fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("failed to read {}: {e}", path.display()));
+    Parser::new(&text).parse_value()
+}
+
 fn compare_vec(actual: &[f64], expected: &[f64], rtol: f64, atol: f64, what: &str) {
     assert_eq!(actual.len(), expected.len(), "{what}: length mismatch");
     for (i, (a, e)) in actual.iter().zip(expected.iter()).enumerate() {
@@ -298,6 +315,58 @@ const CASES: [(&str, &str); 3] = [
     ("hail_region_b", "hail_region_b"),
     ("hail_region_c", "hail_region_c"),
 ];
+
+/// Phase B (Issue 3): the report's exact short-record repro vector.
+///
+/// The hand-rolled BFGS stalled on this record; the reference `optim` reaches
+/// the pinned optimum. This asserts the Rust `fit` reaches the same optimum and
+/// returns no NaN, so the reported case is regression-tested.
+#[test]
+fn golden_short_record_repro_vector() {
+    let root = load_fixture();
+    let models = root.get("models");
+    let datasets = root.get("datasets");
+
+    let y = datasets.get("repro_short").as_f64_vec();
+    assert_eq!(y.len(), 12, "repro_short must be n = 12");
+    let m = models.get("repro_short");
+    let ref_params = m.get("params").as_f64_vec();
+    let ref_loglik = m.get("loglik").as_f64();
+
+    let r = fit(&GenExtreme, &y, &[1.4, 0.3, -0.1]);
+
+    // (1) No NaN.
+    assert!(
+        r.ml_params.iter().all(|v| v.is_finite()),
+        "repro_short: ml_params not finite: {:?}",
+        r.ml_params
+    );
+    assert!(
+        r.loglik.is_finite(),
+        "repro_short: loglik not finite: {}",
+        r.loglik
+    );
+
+    // (2) The log-likelihood matches the reference at the §7.2 tolerance.
+    assert_close(r.loglik, ref_loglik, RTOL, ATOL, "repro_short.loglik");
+
+    // (3) The fitted parameters match the reference (optimizer tolerance).
+    compare_vec(
+        &r.ml_params,
+        &ref_params,
+        OPT_RTOL,
+        OPT_ATOL,
+        "repro_short.ml_params",
+    );
+
+    eprintln!(
+        "repro_short: n = {}, loglik = {:.10}, ref = {:.10}, params = {:?}",
+        y.len(),
+        r.loglik,
+        ref_loglik,
+        r.ml_params
+    );
+}
 
 /// The Rust fit's log-likelihood matches the reference on every short record,
 /// and no region returns NaN (Issue 3, Phase 3).
@@ -416,4 +485,80 @@ fn golden_short_record_multistart_is_init_independent() {
             &format!("{name}.init_independence"),
         );
     }
+}
+
+/// Phase D: the GPD small-n (n = 10) ML divergence is resolved.
+///
+/// The report measured a log-likelihood divergence of up to **365%** at
+/// `n = 10` (the hand-rolled BFGS stalled at a worse fit). The Phase 3
+/// multi-start (the `setics`-style start + Nelder-Mead polish) now reaches the
+/// reference optimum. This asserts the Rust GPD fit's log-likelihood matches the
+/// reference within `1e-8` and the fitted parameters match at the optimizer
+/// tolerance, so the reported case is regression-tested.
+#[test]
+fn golden_gpd_smalln_loglik_matches_reference() {
+    let root = load_gpd_smalln_fixture();
+    let models = root.get("models");
+    let datasets = root.get("datasets");
+
+    let y = datasets.get("y_smalln").as_f64_vec();
+    assert_eq!(y.len(), 10, "gpd small-n fixture must be n = 10");
+    let m = models.get("genpareto_smalln");
+    let ref_params = m.get("params").as_f64_vec();
+    let ref_loglik = m.get("loglik").as_f64();
+    let ref_setics = m.get("setics").as_f64_vec();
+
+    // The `setics`-derived init must match the reference `gpd_k1_setics`.
+    let init = GenPareto.setics(&y, &[0.0, 0.0]);
+    assert_close(
+        init[0],
+        ref_setics[0],
+        1e-12,
+        1e-12,
+        "gpd_smalln.setics.scale",
+    );
+    assert_close(
+        init[1],
+        ref_setics[1],
+        1e-12,
+        1e-12,
+        "gpd_smalln.setics.shape",
+    );
+
+    // The Rust fit uses the caller's init; the multi-start adds the `setics`
+    // heuristic internally. A generic init is fine here.
+    let r = fit(&GenPareto, &y, &[1.0, 0.0]);
+
+    // (1) No NaN.
+    assert!(
+        r.ml_params.iter().all(|v| v.is_finite()),
+        "gpd_smalln: ml_params not finite: {:?}",
+        r.ml_params
+    );
+    assert!(
+        r.loglik.is_finite(),
+        "gpd_smalln: loglik not finite: {}",
+        r.loglik
+    );
+
+    // (2) The log-likelihood matches the reference within 1e-8 (the Phase D
+    // acceptance criterion; the pre-fix divergence was up to 365%).
+    assert_close(r.loglik, ref_loglik, RTOL, ATOL, "gpd_smalln.loglik");
+
+    // (3) The fitted parameters match the reference (optimizer tolerance).
+    compare_vec(
+        &r.ml_params,
+        &ref_params,
+        OPT_RTOL,
+        OPT_ATOL,
+        "gpd_smalln.ml_params",
+    );
+
+    eprintln!(
+        "gpd_smalln: n = {}, loglik = {:.10}, ref = {:.10}, params = {:?}",
+        y.len(),
+        r.loglik,
+        ref_loglik,
+        r.ml_params
+    );
 }

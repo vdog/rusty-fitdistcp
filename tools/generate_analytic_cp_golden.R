@@ -59,6 +59,16 @@ y_positive <- c(
   0.27, 3.45, 1.21, 0.74, 2.63, 1.08, 0.46, 4.31, 1.72, 0.93
 )
 
+# --- Issue 1 exact repro vector (Phase B) -----------------------------------
+# The literal repro from the Phase-1 numerical-issues report: a positive,
+# right-skewed sample with the extreme tail probabilities p = 0.99, 0.996.
+# The report observed the lnorm CP quantile diverging from the reference at
+# these tail levels; this pins the reference's own analytic result.
+repro_y <- c(
+  4.448, 3.538, 4.147, 8.644, 5.297, 1.971, 6.85, 2.143, 7.397, 23.54
+)
+repro_p <- c(0.99, 0.996)
+
 # Probability levels (fixed).
 p_grid <- c(0.1, 0.25, 0.5, 0.75, 0.9)
 
@@ -92,6 +102,24 @@ for (n in ns) {
   )
 }
 
+# --- Issue 1 exact repro (Phase B) ------------------------------------------
+# The literal repro vector at the report's tail probabilities p = 0.99, 0.996.
+# `compute` uses the module-level `p_grid`; here we call the reference routines
+# directly with `repro_p` so the fixture records the report's exact case.
+compute_repro <- function(fn, x, p) {
+  r <- fn(x, p = p)
+  list(
+    params = as.numeric(r$ml_params),
+    ml_quantiles = as.numeric(r$ml_quantiles),
+    cp_quantiles = as.numeric(r$cp_quantiles)
+  )
+}
+repro <- list(
+  repro_norm = compute_repro(qnorm_cp, repro_y, repro_p),
+  repro_lnorm = compute_repro(qlnorm_cp, repro_y, repro_p),
+  repro_expon = compute_repro(qexp_cp, repro_y, repro_p)
+)
+
 # --- Emit JSON --------------------------------------------------------------
 out_dir <- "tests/golden"
 dir.create(out_dir, showWarnings = FALSE, recursive = TRUE)
@@ -123,9 +151,26 @@ for (mi in seq_along(model_names)) {
 }
 lines <- c(lines, "  },")
 
+# Issue 1 exact repro block (Phase B): the report's literal vector at
+# p = 0.99, 0.996, for norm / lnorm / expon.
+lines <- c(lines, '  "repro": {')
+lines <- c(lines, paste0('    "p": ', json_vec(repro_p), ","))
+repro_names <- names(repro)
+for (ri in seq_along(repro_names)) {
+  rn <- repro_names[[ri]]
+  r <- repro[[rn]]
+  lines <- c(lines, paste0("    ", json_str(rn), ": {"))
+  lines <- c(lines, paste0("      \"params\": ", json_vec(r$params), ","))
+  lines <- c(lines, paste0("      \"ml_quantiles\": ", json_vec(r$ml_quantiles), ","))
+  lines <- c(lines, paste0("      \"cp_quantiles\": ", json_vec(r$cp_quantiles)))
+  lines <- c(lines, paste0("    }", if (ri < length(repro_names)) "," else ""))
+}
+lines <- c(lines, "  },")
+
 lines <- c(lines, '  "datasets": {')
 lines <- c(lines, paste0('    "y_norm": ', json_vec(y_norm), ","))
-lines <- c(lines, paste0('    "y_positive": ', json_vec(y_positive)))
+lines <- c(lines, paste0('    "y_positive": ', json_vec(y_positive), ","))
+lines <- c(lines, paste0('    "repro_y": ', json_vec(repro_y)))
 lines <- c(lines, "  }")
 lines <- c(lines, "}")
 

@@ -178,6 +178,25 @@ def test_expon_cp_quantiles_are_analytic():
     np.testing.assert_allclose(res["cp_quantiles"], ref, rtol=1e-8, atol=1e-10)
 
 
+def test_analytic_cp_repro_vector():
+    # Phase B (Issue 1): the report's exact repro vector at p = 0.99, 0.996.
+    # The extreme-tail Student-t bisection precision dominates, so the
+    # documented looser tolerance (rtol=1e-5) is used (see TOLERANCE.md §3.12).
+    fx = _load_analytic_fixture()
+    repro = fx["repro"]
+    p = np.array(repro["p"])
+    y = np.array(fx["datasets"]["repro_y"])
+
+    for key, module in (
+        ("repro_norm", rusty_fitdistcp.norm),
+        ("repro_lnorm", rusty_fitdistcp.lnorm),
+        ("repro_expon", rusty_fitdistcp.expon),
+    ):
+        ref = np.array(repro[key]["cp_quantiles"])
+        res = module.ppf(y, p)
+        np.testing.assert_allclose(res["cp_quantiles"], ref, rtol=1e-5, atol=1e-8)
+
+
 def test_norm_pdf_fields_and_values():
     res = rusty_fitdistcp.pdf_norm(X, Y)
     _check_common(res)
@@ -621,3 +640,87 @@ def test_gpd_dollar_scale_cp_quantiles_match_reference():
         ]
     )
     np.testing.assert_allclose(r["cp_quantiles"], ref_cp, rtol=1e-6, atol=1e-10)
+
+
+# ---------------------------------------------------------------------------
+# Phase B (Issues 1-4): the report's exact repro vectors.
+# ---------------------------------------------------------------------------
+
+_GOLDEN_DIR = os.path.join(
+    os.path.dirname(__file__), "..", "..", "..", "tests", "golden"
+)
+
+
+def _load_golden(name):
+    with open(os.path.join(_GOLDEN_DIR, name)) as fh:
+        return json.load(fh)
+
+
+def test_gpd_dollar_repro_vector():
+    """Phase B (Issue 2): the report's exact dollar repro vector.
+
+    The reference R 0.2.3 errors on the raw scale, so the fixture records the
+    `/1e6`-scaled reference result and the expected finite Rust raw-scale
+    result. The Rust binding fits the raw scale directly and must reproduce it.
+    """
+    fx = _load_golden("gpd_dollar_golden.json")
+    y = np.array(fx["datasets"]["repro_dollar"], dtype=float)
+    p = np.array(fx["p_grid"], dtype=float)
+    raw = fx["repro"]["rust_raw_expected"]
+
+    r = rusty_fitdistcp.ppf_gpd_k1(y, p)
+    assert np.all(np.isfinite(r["ml_params"]))
+    assert np.all(np.isfinite(r["cp_quantiles"]))
+    np.testing.assert_allclose(
+        r["ml_params"], np.array(raw["params"]), rtol=1e-4, atol=1e-6
+    )
+    np.testing.assert_allclose(
+        r["cp_quantiles"], np.array(raw["cp_quantiles"]), rtol=1e-6, atol=1e-10
+    )
+
+
+def test_short_record_repro_vector():
+    """Phase B (Issue 3): the report's exact short-record repro vector."""
+    fx = _load_golden("short_record_golden.json")
+    y = np.array(fx["datasets"]["repro_short"], dtype=float)
+    p = np.array(fx["p_grid"], dtype=float)
+    m = fx["models"]["repro_short"]
+
+    assert y.size == 12
+    r = rusty_fitdistcp.ppf_gev(y, p)
+    assert np.all(np.isfinite(r["ml_params"]))
+    assert np.all(np.isfinite(r["cp_quantiles"]))
+    # The fitted log-likelihood matches the reference (the objective).
+    assert r["ml_value"] == pytest.approx(m["loglik"], rel=1e-6, abs=1e-6)
+    np.testing.assert_allclose(
+        r["ml_params"], np.array(m["params"]), rtol=1e-4, atol=1e-6
+    )
+
+
+def test_gev_monotone_repro_vector():
+    """Phase B (Issue 4): the exact GEV monotonicity repro.
+
+    The CP quantiles must be non-decreasing in `p` and the median non-negative,
+    and match the reference fixture.
+    """
+    fx = _load_golden("gev_monotone_golden.json")
+    y = np.array(fx["datasets"]["repro_x"], dtype=float)
+    p = np.array(fx["p_grid"], dtype=float)
+    m = fx["models"]["repro_gev"]
+
+    r = rusty_fitdistcp.ppf_gev(y, p)
+    assert np.all(np.isfinite(r["ml_params"]))
+    assert np.all(np.isfinite(r["cp_quantiles"]))
+
+    # Phase A acceptance: non-decreasing in p, non-negative median.
+    cp_q = np.asarray(r["cp_quantiles"])
+    assert np.all(np.diff(cp_q) >= 0.0)
+    assert cp_q[0] >= 0.0
+
+    # Reference match.
+    np.testing.assert_allclose(
+        r["ml_params"], np.array(m["params"]), rtol=1e-4, atol=1e-6
+    )
+    np.testing.assert_allclose(
+        r["cp_quantiles"], np.array(m["cp_quantiles"]), rtol=1e-5, atol=1e-8
+    )

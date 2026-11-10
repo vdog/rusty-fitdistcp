@@ -173,18 +173,27 @@ impl Derivatives for GenPareto {
         vec![crate::models::sample_std_ddof1(y), 0.0]
     }
 
-    /// Reject the GPD degenerate region (Phase 3, Issue 3).
+    /// Reject the GPD degenerate region (Phase 3, Issue 3; Phase D).
     ///
     /// The GPD log-likelihood has the same `scale -> 0` spurious maximum as the
     /// GEV. The guard rejects a non-positive scale and a runaway shape
     /// (`|shape| >= 10`); the shape bound is generous so it catches only the
     /// runaway and does not reject the reference's legitimate fits.
+    ///
+    /// **Phase D:** the guard also rejects `shape <= -1`. For `xi <= -1` the GPD
+    /// density is not integrable (the log-likelihood is unbounded above as
+    /// `xi -> -1`), so the multi-start can find a *spurious* boundary optimum
+    /// with a higher log-likelihood than the true interior MLE. The reference
+    /// `gpd_k1_checkmle` uses `minxi = -1` for exactly this reason; mirroring it
+    /// keeps the Rust fit at the reference's interior optimum on small-n records
+    /// (the Phase D GPD small-n divergence).
     fn valid_params(&self, params: &[f64]) -> bool {
         params.len() == 2
             && params[0] > 0.0
             && params[0].is_finite()
             && params[1].is_finite()
-            && params[1].abs() < 10.0
+            && params[1] > -1.0
+            && params[1] < 10.0
     }
 
     /// Analytic score (W9).

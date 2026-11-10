@@ -75,6 +75,13 @@ hail_region_c <- c(
   1.08, 1.55, 1.29, 1.83, 1.14, 1.68, 1.42, 1.24, 1.96, 1.36,
   1.51, 1.19, 1.74, 1.33, 1.60
 )
+# `repro_short` (n = 12): the literal short-record repro from the Phase-1
+# numerical-issues report (Issue 3). The hand-rolled BFGS stalled on this
+# record; the reference `optim` reaches the pinned optimum below.
+repro_short <- c(
+  2.368, 1.879, 2.126, 2.109, 1.207, 1.794, 1.995, 1.496, 1.632, 1.41,
+  1.392, 1.7
+)
 
 # Prediction grid and probability levels (fixed). p = 0.99 is the 1-in-100
 # return level, the quantity the defect changed.
@@ -142,6 +149,8 @@ models <- list()
 models$hail_region_a <- gev_short_record_fixture(hail_region_a, x_grid, p_grid)
 models$hail_region_b <- gev_short_record_fixture(hail_region_b, x_grid, p_grid)
 models$hail_region_c <- gev_short_record_fixture(hail_region_c, x_grid, p_grid)
+# Issue 3 exact repro (Phase B): the report's literal short-record vector.
+models$repro_short <- gev_short_record_fixture(repro_short, x_grid, p_grid)
 
 # --- Emit JSON --------------------------------------------------------------
 out_dir <- "tests/golden"
@@ -176,7 +185,8 @@ lines <- c(lines, "  },")
 lines <- c(lines, '  "datasets": {')
 lines <- c(lines, paste0('    "hail_region_a": ', json_vec(hail_region_a), ","))
 lines <- c(lines, paste0('    "hail_region_b": ', json_vec(hail_region_b), ","))
-lines <- c(lines, paste0('    "hail_region_c": ', json_vec(hail_region_c)))
+lines <- c(lines, paste0('    "hail_region_c": ', json_vec(hail_region_c), ","))
+lines <- c(lines, paste0('    "repro_short": ', json_vec(repro_short)))
 lines <- c(lines, "  }")
 lines <- c(lines, "}")
 

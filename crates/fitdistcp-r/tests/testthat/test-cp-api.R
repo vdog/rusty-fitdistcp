@@ -459,6 +459,96 @@ test_that("qgpd_k1_cp fits dollar-scale data without NaN (Issue 2)", {
 })
 
 # ---------------------------------------------------------------------------
+# Phase B (Issues 1-4): the report's exact repro vectors.
+# ---------------------------------------------------------------------------
+
+test_that("analytic CP repro vector matches the reference (Issue 1)", {
+  # Phase B (Issue 1): the report's exact repro vector at p = 0.99, 0.996.
+  # The extreme-tail Student-t bisection precision dominates, so the documented
+  # looser tolerance (1e-5) is used (see TOLERANCE.md §3.12).
+  y <- c(4.448, 3.538, 4.147, 8.644, 5.297, 1.971, 6.85, 2.143, 7.397, 23.54)
+  p <- c(0.99, 0.996)
+
+  # Reference cp_quantiles from tools/generate_analytic_cp_golden.R.
+  ref_norm <- c(25.368335076335892, 29.110171585987054)
+  ref_lnorm <- c(44.202864705166519, 67.978165434463392)
+  ref_expon <- c(39.758114757544178, 50.095993372633203)
+
+  expect_equal(qnorm_cp(y, p)$cp_quantiles, ref_norm, tolerance = 1e-5)
+  expect_equal(qlnorm_cp(y, p)$cp_quantiles, ref_lnorm, tolerance = 1e-5)
+  expect_equal(qexp_cp(y, p)$cp_quantiles, ref_expon, tolerance = 1e-5)
+})
+
+test_that("GPD dollar repro vector fits without NaN (Issue 2)", {
+  # Phase B (Issue 2): the report's exact dollar repro vector. The reference
+  # errors on the raw scale, so the fixture records the `/1e6`-scaled reference
+  # result and the expected finite Rust raw-scale result.
+  x <- c(
+    1200000, 45000000, 8300000, 99000000, 21000000, 6700000, 33000000,
+    15000000, 58000000, 9200000, 27000000, 4100000, 76000000, 18000000,
+    5200000, 39000000, 11000000, 64000000, 2400000, 47000000
+  )
+  p <- c(0.1, 0.25, 0.5, 0.75, 0.9)
+  r <- qgpd_k1_cp(x, p)
+
+  expect_true(all(is.finite(r$ml_params)))
+  expect_true(all(is.finite(r$cp_quantiles)))
+
+  # Reference raw-scale params / cp_quantiles from
+  # tools/generate_gpd_dollar_golden.R.
+  expect_equal(r$ml_params[1], 35098900.287677258, tolerance = 1e-4)
+  expect_equal(r$ml_params[2], -0.18188490444845734, tolerance = 1e-4)
+  ref_cp <- c(
+    2846891.9206616138, 8097524.578084792, 20849015.535992697,
+    44297608.081734352, 75448966.263390481
+  )
+  expect_equal(r$cp_quantiles, ref_cp, tolerance = 1e-6)
+})
+
+test_that("short-record repro vector matches the reference (Issue 3)", {
+  # Phase B (Issue 3): the report's exact short-record repro vector.
+  y <- c(
+    2.368, 1.879, 2.126, 2.109, 1.207, 1.794, 1.995, 1.496, 1.632, 1.41,
+    1.392, 1.7
+  )
+  p <- c(0.1, 0.25, 0.5, 0.75, 0.9, 0.99)
+  r <- qgev_cp(y, p)
+
+  expect_true(all(is.finite(r$ml_params)))
+  expect_true(all(is.finite(r$cp_quantiles)))
+
+  # Reference loglik / params from tools/generate_short_record_golden.R.
+  expect_equal(r$ml_value, -3.7327922863698566, tolerance = 1e-6)
+  ref_params <- c(1.6422061515748778, 0.32892855320843112, -0.29202617533474773)
+  expect_equal(r$ml_params, ref_params, tolerance = 1e-3)
+})
+
+test_that("GEV monotone repro is non-decreasing with a non-negative median (Issue 4)", {
+  # Phase B (Issue 4): the exact GEV monotonicity repro. The CP quantiles must
+  # be non-decreasing in p and the median non-negative, and match the reference.
+  x <- c(
+    1.426, 1.123, 1.447, 1.51, 0.814, 2.773, 1.907, 2.208, 0.904, 2.343,
+    1.144, 0.69
+  )
+  p <- c(0.5, 0.8, 0.9, 0.96, 0.98, 0.99)
+  r <- qgev_cp(x, p)
+
+  expect_true(all(is.finite(r$ml_params)))
+  expect_true(all(is.finite(r$cp_quantiles)))
+
+  # Phase A acceptance: non-decreasing in p, non-negative median.
+  expect_true(all(diff(r$cp_quantiles) >= 0))
+  expect_true(r$cp_quantiles[1] >= 0)
+
+  # Reference cp_quantiles from tools/generate_gev_monotone_golden.R.
+  ref_cp <- c(
+    1.4206082320705671, 2.1833388446708351, 2.7079014142368996,
+    3.5249425084813422, 4.4182512841253745, 5.7609806638231946
+  )
+  expect_equal(r$cp_quantiles, ref_cp, tolerance = 1e-5)
+})
+
+# ---------------------------------------------------------------------------
 # Phase 5 (Issue 5): Weibull/gamma accuracy.
 # ---------------------------------------------------------------------------
 
