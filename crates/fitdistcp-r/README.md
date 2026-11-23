@@ -20,6 +20,25 @@ calibrated-prior entry point, e.g. `dnorm_cp`, `pnorm_cp`, `qnorm_cp`,
 `rnorm_cp`, `tnorm_cp`. See [`NAMESPACE`](NAMESPACE:1) for the full exported
 surface.
 
+## Behaviour notes (Issue 2 re-check)
+
+- **`_p1` / `_p12` models require exactly one of `t0` / `n0`.** `qgev_p1_cp`,
+  `qnorm_p1_cp`, `qgev_p12_cp` (and the other `_p1`/`_p12` entry points) raise
+  an R error when neither is supplied (`"Either t0 or n0 must be specified"`) or
+  when both are (`"Only one of t0 or n0 must be specified"`), matching the
+  reference `maket0`. Earlier versions silently defaulted `t0 = 0`.
+- **`degenerate_fit`** is a new logical field in the `q/d/p/r_cp` return lists.
+  It is `TRUE` when a GEV fit is degenerate (a spurious `scale -> 0` maximum on
+  a very short record); in that case `cp_quantiles` / `cp_pdf` are `NaN` rather
+  than huge finite numbers. It is `FALSE` for all other models/paths.
+- **`cp_monotone_clamped`** is `TRUE` when the Rust-only monotonicity guard
+  raised a CP quantile to keep the curve non-decreasing (see
+  [`tests/golden/TOLERANCE.md`](../../tests/golden/TOLERANCE.md) §7).
+- **GEV CP quantiles are not clamped** to the ML upper endpoint (the reference
+  does not clamp either), and **GPD fits with shape `<= -0.98` revert to the ML
+  curve**. See the top-level [`README.md`](../../README.md) "Known differences"
+  section.
+
 ## Installation
 
 See [`INSTALL.md`](../../INSTALL.md:1) for the full guide (including the Python

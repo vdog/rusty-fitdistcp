@@ -72,6 +72,13 @@ impl Derivatives for Exponential {
         1
     }
 
+    /// The exponential has a one-parameter, strictly concave likelihood with a
+    /// closed-form MLE (`rate = n / Σy`), so the multi-start + Nelder–Mead
+    /// polish is wasted work (Issue 2 re-check, item F1).
+    fn needs_multistart(&self) -> bool {
+        false
+    }
+
     fn score(&self, params: &[f64], y: &[f64]) -> Vec<f64> {
         let rate = params[0];
         let n = y.len() as f64;

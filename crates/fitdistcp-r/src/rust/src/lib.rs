@@ -226,26 +226,34 @@ fn make_request(
 }
 
 /// The reference `maket0`: resolve the prediction point `t0` from the user's
-/// `t0`/`n0` (W14).
+/// `t0`/`n0` (W14, E1).
 ///
-/// The reference semantics are:
+/// Delegates to the core [`fitdistcp_core::utils::maket0`] so the reference
+/// error semantics are preserved:
 ///
 /// - if `t0` is supplied, use it directly (`n0` must be absent);
 /// - otherwise `t0 = t[n0]` where `n0` is a **1-based positional index** into
 ///   `t` (the reference `maket0(NA, n0, t) = t[n0]`).
 ///
-/// Returns `0.0` when neither is supplied or when `t` is empty.
+/// # Errors
+///
+/// Raises a proper R error (via [`extendr_api::throw_r_error`]) carrying the
+/// reference message text when neither `t0` nor `n0` is supplied
+/// (`"Either t0 or n0 must be specified"`), when both are supplied
+/// (`"Only one of t0 or n0 must be specified"`), or when `n0` is out of range
+/// for `t`. Previously this helper silently returned `0.0`, which let
+/// `qgev_p1_cp`/`qnorm_p1_cp`/`qgev_p12_cp` accept a call with no prediction
+/// point — the reference raises instead.
+///
+/// Note: extendr 0.7's `#[extendr]` wrapper treats a `Result::Err` return value
+/// as a panic ("User function panicked"), so we cannot propagate the core
+/// `Result` through the binding layer; `throw_r_error` is the supported way to
+/// surface a language-level R error.
 fn maket0(t: &[f64], t0: Option<f64>, n0: Option<f64>) -> f64 {
-    if let Some(v) = t0 {
-        return v;
+    match fitdistcp_core::utils::maket0(t0, n0, t) {
+        Ok(v) => v,
+        Err(e) => throw_r_error(e.to_string()),
     }
-    if let Some(idx) = n0 {
-        let i = idx.round() as isize;
-        if i >= 1 && (i as usize) <= t.len() {
-            return t[i as usize - 1];
-        }
-    }
-    0.0
 }
 
 /// Decenter a `_p1` [`FitResult`]'s `ml_params`/`cp_params` intercept.
@@ -445,6 +453,8 @@ fn q_cp_list(r: &FitResult, cp_method: &str, extra: Vec<(&str, Robj)>) -> List {
         "cp_method",
         // Phase A (Issue 4): whether the CP-quantile monotonicity guard fired.
         "cp_monotone_clamped",
+        // Issue 2 re-check (item B2): whether the fit is degenerate.
+        "degenerate_fit",
     ];
     let mut values: Vec<Robj> = vec![
         doubles(r.ml_params.clone()).into(),
@@ -462,6 +472,7 @@ fn q_cp_list(r: &FitResult, cp_method: &str, extra: Vec<(&str, Robj)>) -> List {
         f64::NAN.into(),
         cp_method.into(),
         r.cp_monotone_clamped.into(),
+        r.degenerate_fit.into(),
     ];
     for (n, v) in extra {
         names.push(n);
@@ -480,6 +491,8 @@ fn d_cp_list(r: &FitResult, cp_method: &str, extra: Vec<(&str, Robj)>) -> List {
         "cp_method",
         // Phase A (Issue 4): whether the CP-quantile monotonicity guard fired.
         "cp_monotone_clamped",
+        // Issue 2 re-check (item B2): whether the fit is degenerate.
+        "degenerate_fit",
     ];
     let mut values: Vec<Robj> = vec![
         doubles(r.ml_params.clone()).into(),
@@ -488,6 +501,7 @@ fn d_cp_list(r: &FitResult, cp_method: &str, extra: Vec<(&str, Robj)>) -> List {
         RUST_NOT_SELECTED.into(),
         cp_method.into(),
         r.cp_monotone_clamped.into(),
+        r.degenerate_fit.into(),
     ];
     for (n, v) in extra {
         names.push(n);
@@ -517,6 +531,8 @@ fn p_cp_list(
         "cp_method",
         // Phase A (Issue 4): whether the CP-quantile monotonicity guard fired.
         "cp_monotone_clamped",
+        // Issue 2 re-check (item B2): whether the fit is degenerate.
+        "degenerate_fit",
     ];
     let mut values: Vec<Robj> = vec![
         doubles(r.ml_params.clone()).into(),
@@ -525,6 +541,7 @@ fn p_cp_list(
         RUST_NOT_SELECTED.into(),
         cp_method.into(),
         r.cp_monotone_clamped.into(),
+        r.degenerate_fit.into(),
     ];
     for (n, v) in extra {
         names.push(n);
@@ -543,6 +560,8 @@ fn r_cp_list(r: &FitResult, cp_method: &str, extra: Vec<(&str, Robj)>) -> List {
         "cp_method",
         // Phase A (Issue 4): whether the CP-quantile monotonicity guard fired.
         "cp_monotone_clamped",
+        // Issue 2 re-check (item B2): whether the fit is degenerate.
+        "degenerate_fit",
     ];
     let mut values: Vec<Robj> = vec![
         doubles(r.ml_params.clone()).into(),
@@ -551,6 +570,7 @@ fn r_cp_list(r: &FitResult, cp_method: &str, extra: Vec<(&str, Robj)>) -> List {
         RUST_NOT_SELECTED.into(),
         cp_method.into(),
         r.cp_monotone_clamped.into(),
+        r.degenerate_fit.into(),
     ];
     for (n, v) in extra {
         names.push(n);

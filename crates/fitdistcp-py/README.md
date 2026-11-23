@@ -96,6 +96,14 @@ Model-specific extras:
 
 Notes on specific fields:
 
+- `degenerate_fit` (Issue 2 re-check, item B) is `true` when the GEV fit is
+  degenerate (a spurious `scale -> 0` maximum on a very short record). In that
+  case `cp_quantiles` / `cp_pdf` are `NaN` rather than huge finite numbers; the
+  MLE parameters are still reported. It is `false` for all other models/paths.
+- `cp_monotone_clamped` is `true` when the Rust-only monotonicity guard raised a
+  CP quantile to keep the curve non-decreasing (see `tests/golden/TOLERANCE.md`
+  §7).
+
 - `maic` is the reference **3-vector** `[ml_value, -nparams, ml_value - nparams]`.
 - `standard_errors` is a NumPy **object-dtype** array; entries may be the string
   `"square root not possible"` (reference `make_se` semantics).
@@ -106,6 +114,14 @@ Notes on specific fields:
   disabled by default.
 - `rvs` draws `np.random.uniform(size=n)` and inverts via `ppf`.
 - `reltest` returns `{'actual_p_ml', 'actual_p_cp', 'p'}` as lists.
+
+## Predictor models require `t0` or `n0`
+
+`genextreme_p1` (and `norm_p1`) require **exactly one** of `t0` / `n0`. Passing
+neither raises `ValueError("Either t0 or n0 must be specified")`; passing both
+raises `ValueError("Only one of t0 or n0 must be specified")` — matching the
+reference `utils.py::maket0` (Issue 2 re-check, item E). Earlier versions
+silently defaulted `t0 = 0`.
 
 ## Documented discrepancies
 

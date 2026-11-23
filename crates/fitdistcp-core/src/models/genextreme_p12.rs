@@ -339,10 +339,37 @@ impl Derivatives for GenExtremeP12 {
     /// log-likelihood is unbounded; the reference guards against it with
     /// `gev_checkmle` shape bounds. We reject a non-positive scale and
     /// `|shape| >= 10`, mirroring [`crate::models::GenExtreme::valid_params`].
+    ///
+    /// Here `params[3]` is the **log-scale slope** and the per-observation scale
+    /// is `sigma_i = exp(beta2 + params[3] * centered2(t2_i))`, which is always
+    /// positive; the `params[3] > 0` test is therefore a finiteness/runaway
+    /// guard on the slope, not a scale-positivity test. The relative scale floor
+    /// is applied in [`GenExtremeP12::valid_params_for`].
     fn valid_params(&self, params: &[f64]) -> bool {
         let scale = params[3];
         let shape = params[4];
-        scale > 0.0 && shape.abs() < 10.0
+        scale.is_finite() && shape.is_finite() && shape.abs() < 10.0
+    }
+
+    /// Reject the degenerate region **relative to the data** (Issue 2 re-check,
+    /// item B1).
+    ///
+    /// The spurious `scale -> 0` maximum of the plain GEV appears here as the
+    /// per-observation scale `sigma_i = exp(beta2 + params[3] * centered2(t2_i))`
+    /// collapsing toward zero, and the runaway-location face appears as the
+    /// location `mu_i = beta0 + params[1] * centered1(t1_i)` running off. We
+    /// evaluate both at the **prediction point** and apply the shared
+    /// [`crate::models::gev_scale_and_location_ok`] predicate, in addition to
+    /// [`GenExtremeP12::valid_params`]. The shape bound is intentionally not
+    /// tightened to the reference `maxxi = 1` (see the plan §7 open question 1
+    /// resolution).
+    fn valid_params_for(&self, params: &[f64], y: &[f64]) -> bool {
+        if !self.valid_params(params) {
+            return false;
+        }
+        let mu_pred = self.location_prediction(params[0], params[1]);
+        let sigma_pred = self.scale_prediction(params[2], params[3]);
+        crate::models::gev_scale_and_location_ok(mu_pred, sigma_pred, y)
     }
 }
 
@@ -422,6 +449,30 @@ mod tests {
         let m = GenExtremeP12::new(vec![0.0, 2.0], vec![0.0, 2.0], 1.0, 1.0, 1.0, 1.0);
         assert_close(m.scale(0.0, 0.0, 0), 1.0, "scale(0)");
         assert_close(m.scale(0.0, 1.0, 1), (1.0_f64).exp(), "scale(1)");
+    }
+
+    #[test]
+    fn valid_params_for_rejects_vanishing_scale() {
+        // Item B1: the `_p12` guard applies the relative scale floor to the
+        // per-observation scale at the prediction point.
+        // params = [beta0, beta1, beta2, scale, shape].
+        let m = GenExtremeP12::without_predictor();
+        let y = [1.0, 1.2, 0.9, 1.5, 1.1, 1.3, 0.8, 1.4, 1.0, 1.6];
+        // sigma = exp(beta2) = exp(0) = 1 (valid).
+        assert!(
+            m.valid_params_for(&[1.2, 0.0, 0.0, 0.0, -0.1], &y),
+            "normal fit"
+        );
+        // sigma = exp(-20) ~ 2e-9 (vanishing) must be rejected.
+        assert!(
+            !m.valid_params_for(&[1.2, 0.0, -20.0, 0.0, 0.1], &y),
+            "vanishing scale must be rejected"
+        );
+        // Runaway location intercept must be rejected.
+        assert!(
+            !m.valid_params_for(&[1e6, 0.0, 0.0, 0.0, 0.1], &y),
+            "runaway location intercept must be rejected"
+        );
     }
 
     #[test]

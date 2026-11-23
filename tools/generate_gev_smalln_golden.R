@@ -1,6 +1,6 @@
 #!/usr/bin/env Rscript
 # ---------------------------------------------------------------------------
-# Phase 4 (Issue 4) golden-fixture generator: GEV CP support clamping at small n.
+# Phase 4 (Issue 4) golden-fixture generator: GEV CP quantiles at small n.
 #
 # Runs the REFERENCE fitdistcp R package's own GEV CP machinery
 # (`gev_setics` + `gev_loglik` + `gev_ldda`/`gev_lddda` + `gev_mu1fa`/`gev_mu2fa`
@@ -8,13 +8,13 @@
 # `ml_params`, `ml_max`, `revert2ml`, and `cp_quantiles` (including the 1-in-100
 # level, p = 0.99) as JSON into tests/golden/gev_smalln_golden.json.
 #
-# The defect (Issue 4): at small n the DMGS expansion can push a CP quantile
-# outside the GEV support (e.g. a negative 1-in-100 return level for a
-# positive-support fit). The reference `fixgevrange` (005_utils.R) clamps a
-# value to the (nudged) support bound. The Rust `predict_gev` now applies the
-# same clamp and falls back to the MLE quantile when a CP quantile still leaves
-# the support. This fixture pins the reference result so the Rust clamp can be
-# checked against it.
+# Issue 2 re-check (item A): the reference `qgev_cp` does NOT clamp the CP
+# quantiles to the support; it only uses `ml_max` to report the bound and to
+# build the quantile-derived density. An earlier Rust revision clamped the CP
+# quantiles (the `fixgevrange` bound and the `ml_max`/`ml_min` fallback), which
+# biased the upper tail low. The clamp has been removed, so this fixture now
+# records the reference **unclamped** `cp_quantiles` (the item-A target). The
+# `cp_quantiles_raw` field is retained for reference and equals `cp_quantiles`.
 #
 # The fixtures come from the reference code, not a re-implementation:
 #   * `gev_setics` (110b_gev_libs.R) — the initial conditions,
@@ -93,9 +93,8 @@ OPT_CTRL <- list(fnscale = -1, reltol = 1e-14, maxit = 10000)
 
 # --- Reference qgev_cp core (quantiles), transcribed from 110a_gev.R --------
 # We reproduce the exact reference computation for the CP quantiles, so the
-# fixture is the reference's own output. We additionally record the reference
-# `fixgevrange`-clamped CP quantiles (the Phase 4 target) alongside the raw
-# DMGS CP quantiles.
+# fixture is the reference's own output. The reference does NOT clamp the CP
+# quantiles (Issue 2 re-check, item A), so `cp_quantiles` is the raw DMGS value.
 gev_cp_fixture <- function(x, x_grid, p_grid) {
   nx <- length(x)
   alpha <- 1 - p_grid
@@ -124,21 +123,18 @@ gev_cp_fixture <- function(x, x_grid, p_grid) {
   lddd <- gev_lddda(x, v1hat, v2hat, v3hat)
   lambdad_rh_flat <- c(0, -1 / v2hat, 0)
 
-  # CP quantiles (rh_flat), raw DMGS
+  # CP quantiles (rh_flat), raw DMGS — the reference does NOT clamp these
+  # (Issue 2 re-check, item A).
   mu1 <- gev_mu1fa(alpha, v1hat, v2hat, v3hat)
   mu2 <- gev_mu2fa(alpha, v1hat, v2hat, v3hat)
   fhat <- dgev(ml_quantiles, mu = v1hat, sigma = v2hat, xi = v3hat)
   dq <- dmgs(lddi, lddd, mu1, lambdad_rh_flat, mu2, dim = 3)
-  cp_quantiles_raw <- ml_quantiles + dq / (nx * fhat)
-
-  # Phase 4 target: the reference `fixgevrange` clamp applied to the CP
-  # quantiles (the Rust `predict_gev` now does this).
-  cp_quantiles <- fixgevrange(cp_quantiles_raw, v1hat, v2hat, v3hat)
+  cp_quantiles <- ml_quantiles + dq / (nx * fhat)
 
   list(
     params = ml_params, revert2ml = revert2ml, ml_max = ml_max,
     ml_quantiles = ml_quantiles, ml_pdf = ml_pdf,
-    cp_quantiles_raw = cp_quantiles_raw, cp_quantiles = cp_quantiles
+    cp_quantiles_raw = cp_quantiles, cp_quantiles = cp_quantiles
   )
 }
 

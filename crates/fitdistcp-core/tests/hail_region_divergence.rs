@@ -149,9 +149,23 @@ pub struct DivergenceCounts {
     pub gt_10pct: usize,
     /// Number of regions whose CP return level was non-finite.
     pub non_finite: usize,
+    /// Number of regions whose fit was flagged **degenerate** (item B2:
+    /// `degenerate_fit == true`, i.e. every multi-start candidate failed the
+    /// relative scale/location guard). Item B1 must drive this to zero on the
+    /// corpus (the multi-start finds a valid interior candidate).
+    pub degenerate: usize,
+    /// Number of regions whose CP return level was a **huge finite** value
+    /// (`|cp| > HUGE_CP_BOUND`). These are the DMGS small-`n` blow-up at a
+    /// large **positive** shape (the GEV analogue of item C), **not** the
+    /// item-B `scale -> 0` degeneracy (which is counted by `degenerate`).
+    pub huge_finite: usize,
     /// Total number of regions with at least one non-zero year (fitted).
     pub fitted: usize,
 }
+
+/// The bound above which a CP return level is considered a **huge finite**
+/// value. A meaningful 1-in-100 return level for these records is `O(1)`–`O(10)`.
+pub const HUGE_CP_BOUND: f64 = 1e6;
 
 impl DivergenceCounts {
     /// The `> 1%` divergence as a percentage of the fitted regions.
@@ -174,6 +188,8 @@ pub fn count_divergences(regions: &[Region]) -> DivergenceCounts {
         gt_1pct: 0,
         gt_10pct: 0,
         non_finite: 0,
+        degenerate: 0,
+        huge_finite: 0,
         fitted: 0,
     };
 
@@ -195,6 +211,11 @@ pub fn count_divergences(regions: &[Region]) -> DivergenceCounts {
         };
         let fit = predict_gev(GenExtreme, &req, &[0.0, 1.0, 0.1], FDALPHA);
 
+        // Item B2: a degenerate fit is flagged and returns NaN CP output.
+        if fit.degenerate_fit {
+            counts.degenerate += 1;
+        }
+
         let cp = fit.cp_quantiles[0];
         let ml = fit.ml_quantiles[0];
 
@@ -203,6 +224,11 @@ pub fn count_divergences(regions: &[Region]) -> DivergenceCounts {
             counts.gt_1pct += 1;
             counts.gt_10pct += 1;
             continue;
+        }
+
+        // Item B: a huge finite CP return level is the degenerate-fit defect.
+        if cp.abs() > HUGE_CP_BOUND {
+            counts.huge_finite += 1;
         }
 
         // Relative divergence of the CP return level from the MLE return level.
@@ -231,16 +257,59 @@ fn hail_region_divergences_are_recorded_and_finite() {
     println!("  > 1%:  {} ({:.1}%)", counts.gt_1pct, counts.pct_gt_1());
     println!("  > 10%: {}", counts.gt_10pct);
     println!("  non-finite: {}", counts.non_finite);
+    println!("  degenerate (item B2 flag): {}", counts.degenerate);
+    println!(
+        "  huge finite (> {HUGE_CP_BOUND:e}): {}",
+        counts.huge_finite
+    );
     println!("  pre-fix reference (real data):");
     for &(corpus, pct1, c10, nf) in &PREFIX_COUNTS {
         println!("    {corpus}: {pct1:.1}% / {c10} / {nf}");
     }
 
-    // The Phase 3 `valid_params` guard rejects the degenerate fit that produced
-    // the pre-fix NaNs, so the post-fix non-finite count must be zero.
+    // Issue 2 re-check (item B1): the relative degenerate-fit guard rejects the
+    // `scale -> 0` spurious maximum, so the multi-start finds a valid interior
+    // candidate on **every** region and **no** fit is flagged degenerate. This
+    // is the item-B guarantee and is asserted exactly (zero).
     assert_eq!(
-        counts.non_finite, 0,
-        "post-fix hail-region fits must be finite (pre-fix had up to 121 NaNs)"
+        counts.degenerate, 0,
+        "item B1: no region may be flagged degenerate (the multi-start must \
+         find a valid interior candidate); got {} of {}",
+        counts.degenerate, counts.fitted
+    );
+
+    // The remaining huge finite CP return levels are **not** the item-B
+    // `scale -> 0` degeneracy. They are the DMGS expansion blowing up at a
+    // large **positive** shape (all 192 have shape >= 3.2, median ~7.4) on
+    // short records — the GEV analogue of item C (the GPD near-−1 blow-up),
+    // which item B does not address. The count is pinned to the known value so
+    // a regression that reintroduces the item-B degeneracy (which would raise
+    // it) is caught. See the plan §8 B1 notes for the evidence.
+    const KNOWN_LARGE_POSITIVE_SHAPE_HUGE: usize = 192;
+    assert_eq!(
+        counts.huge_finite, KNOWN_LARGE_POSITIVE_SHAPE_HUGE,
+        "the huge finite CP return levels must be exactly the known \
+         large-positive-shape DMGS blow-up (item C's GEV analogue), not the \
+         item-B degeneracy; got {} of {}",
+        counts.huge_finite, counts.fitted
+    );
+
+    // The non-finite CP return levels are the DMGS expansion being singular at
+    // a near-−1 fitted shape (shape ~ -0.99, just above the `revert2ml`
+    // threshold of 1) on very short records (n = 3-8) — again item C's GEV
+    // analogue, not item B. Pinned to the known value.
+    //
+    // Issue 2 re-check (item A): the CP quantiles are no longer clamped to the
+    // GEV support, so these near-−1 singularities surface as NaN rather than
+    // being masked by the clamp. This matches the reference (which does not
+    // clamp either).
+    const KNOWN_NEAR_MINUS_ONE_NONFINITE: usize = 9;
+    assert_eq!(
+        counts.non_finite, KNOWN_NEAR_MINUS_ONE_NONFINITE,
+        "the non-finite CP return levels must be exactly the known near-−1 \
+         DMGS singularities (item C's GEV analogue), not the item-B degeneracy; \
+         got {} of {}",
+        counts.non_finite, counts.fitted
     );
 
     // The divergence counts must be well-formed (monotone thresholds).

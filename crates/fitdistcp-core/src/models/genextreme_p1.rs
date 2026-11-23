@@ -230,6 +230,36 @@ impl Derivatives for GenExtremeP1 {
             init.to_vec()
         }
     }
+
+    /// Reject the GEV degenerate region (Issue 2 re-check, item B1).
+    ///
+    /// `params = [beta0, beta1, scale, shape]`. The GEV has a spurious
+    /// `scale -> 0`, `shape -> +inf` maximum (the density concentrates on the
+    /// sample minimum); we reject a non-positive scale and a runaway shape
+    /// (`|shape| >= 10`), mirroring [`crate::models::GenExtreme::valid_params`].
+    /// The shape bound is intentionally not tightened to the reference
+    /// `maxxi = 1` (see the plan §7 open question 1 resolution).
+    fn valid_params(&self, params: &[f64]) -> bool {
+        params.len() == 4
+            && params[2] > 0.0
+            && params[2].is_finite()
+            && params[3].is_finite()
+            && params[3].abs() < 10.0
+    }
+
+    /// Reject the degenerate region **relative to the data** (Issue 2 re-check,
+    /// item B1).
+    ///
+    /// In addition to [`GenExtremeP1::valid_params`], this rejects a fit whose
+    /// scale is vanishingly small relative to the data spread or whose location
+    /// intercept has run away, via
+    /// [`crate::models::gev_scale_and_location_ok`] (applied to `beta0` and
+    /// `scale`). This is what actually rejects the `scale -> 0` spurious
+    /// maximum.
+    fn valid_params_for(&self, params: &[f64], y: &[f64]) -> bool {
+        self.valid_params(params)
+            && crate::models::gev_scale_and_location_ok(params[0], params[2], y)
+    }
 }
 
 #[cfg(test)]
@@ -297,6 +327,27 @@ mod tests {
         assert_close(m.centered_prediction(), 0.0, "centered_prediction");
         let m2 = GenExtremeP1::new(vec![0.0, 2.0], 3.0, 1.0);
         assert_close(m2.centered_prediction(), 2.0, "centered_prediction(3)");
+    }
+
+    #[test]
+    fn valid_params_for_rejects_vanishing_scale() {
+        // Item B1: the `_p1` guard applies the same relative scale floor as the
+        // plain GEV. params = [beta0, beta1, scale, shape].
+        let m = GenExtremeP1::without_predictor();
+        let y = [1.0, 1.2, 0.9, 1.5, 1.1, 1.3, 0.8, 1.4, 1.0, 1.6];
+        assert!(m.valid_params_for(&[1.2, 0.0, 0.3, -0.1], &y), "normal fit");
+        assert!(
+            !m.valid_params_for(&[1.2, 0.0, 1e-6, 0.1], &y),
+            "vanishing scale must be rejected"
+        );
+        assert!(
+            m.valid_params_for(&[1.2, 0.0, 0.05, 0.1], &y),
+            "legitimate small scale must be accepted"
+        );
+        assert!(
+            !m.valid_params_for(&[1e6, 0.0, 0.3, 0.1], &y),
+            "runaway location intercept must be rejected"
+        );
     }
 
     #[test]

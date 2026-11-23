@@ -155,15 +155,15 @@ test_that("qgev_cp returns the GEV-specific fields and a revert2ml flag", {
   expect_true(all(is.finite(r$cp_quantiles)))
 })
 
-test_that("qgev_cp clamps CP quantiles to the GEV support at small n (Issue 4)", {
-  # Phase 4 (Issue 4): at small n the DMGS expansion can push a CP quantile
-  # outside the GEV support (e.g. a negative 1-in-100 return level for a
-  # positive-support fit). The core now clamps to the support bound (the
-  # reference `fixgevrange`) and falls back to the MLE quantile when a CP
-  # quantile still leaves the support.
+test_that("qgev_cp does NOT clamp CP quantiles to the GEV support (Issue 2 re-check, item A)", {
+  # Issue 2 re-check (item A): the reference `qgev_cp` does not clamp
+  # `rh_flat_quantiles` to `ml_max`; an earlier Rust revision did, which biased
+  # the upper tail low. The clamp has been removed, so the CP tail may exceed
+  # `ml_max`.
   #
-  # The `y_smalln_clamp` dataset (n = 20) is the defect case: its raw DMGS CP
-  # quantile at p = 0.99 exceeds `ml_max`, so the clamp is genuinely exercised.
+  # The `y_smalln_clamp` dataset (n = 20) is the case whose raw DMGS CP
+  # quantile at p = 0.99 exceeds `ml_max`; the Rust output must now match that
+  # raw value.
   y <- c(
     1.27, 1.37, 1.57, 1.91, 1.20, 1.90, 1.94, 1.66, 1.63, 1.06,
     1.21, 1.18, 1.69, 1.38, 1.77, 1.50, 1.72, 1.99, 1.38, 1.78
@@ -175,16 +175,16 @@ test_that("qgev_cp clamps CP quantiles to the GEV support at small n (Issue 4)",
   expect_true(r$ml_params[3] < 0.0)
   expect_true(is.finite(r$ml_max))
 
-  # Every CP quantile is finite and within the support.
+  # Every CP quantile is finite (it is intentionally NOT clamped to `ml_max`).
   expect_true(all(is.finite(r$cp_quantiles)))
-  expect_true(all(r$cp_quantiles <= r$ml_max + 1e-9))
 
-  # The 1-in-100 return level (p = 0.99) is finite, within support, and
-  # non-negative (the Issue 4 defect was a negative return level).
+  # The 1-in-100 return level (p = 0.99) is finite and non-negative (the
+  # Issue 4 defect was a negative return level), and it exceeds `ml_max`
+  # (the reference CP tail is above the ML upper endpoint).
   q100 <- r$cp_quantiles[length(r$cp_quantiles)]
   expect_true(is.finite(q100))
   expect_true(q100 >= 0.0)
-  expect_true(q100 <= r$ml_max + 1e-9)
+  expect_true(q100 > r$ml_max)
 })
 
 test_that("qgev_cp is robust on short records (Issue 3)", {
@@ -242,7 +242,8 @@ test_that("_p1 wrappers accept an integer predictor vector", {
   x <- c(0.5, 1.2, 0.8, 2.1, 0.3, 1.5, 0.9, 1.1, 0.7, 1.8)
   t <- seq(1, 10)
   t0 <- 5
-  n0 <- 10
+  # E1: exactly one of `t0`/`n0` must be supplied (reference `maket0`).
+  n0 <- NA
   p <- c(0.25, 0.5, 0.75)
 
   rq <- qnorm_p1_cp(x, t, t0, n0, p)
@@ -459,6 +460,44 @@ test_that("qgpd_k1_cp fits dollar-scale data without NaN (Issue 2)", {
 })
 
 # ---------------------------------------------------------------------------
+# Issue 2 re-check (item C1): GPD at small n with the ML shape near -1.
+# ---------------------------------------------------------------------------
+
+test_that("qgpd_k1_cp reverts near -1 and is not flat (item C1)", {
+  # Before item C1 the Rust multi-start landed at a shape just above -1
+  # (e.g. -0.987), which the reference `revert2ml` does not catch; the DMGS
+  # `1/fhat` term then blew up and the monotone guard flattened the CP curve far
+  # above the data (the reported n = 20 case: 19.8 vs the reference 2.06). The
+  # fix widens the revert to `shape <= -0.98`, so the CP output equals the ML
+  # output and stays bounded by the data.
+  x <- c(
+    0.002, 0.3580957422515204, 0.45586561262981606, 0.5250692866983445,
+    0.5804792399520996, 0.627469709675076, 0.668683518185681,
+    0.7056409316494344, 0.739306862964518, 0.7703368437858562,
+    0.7991990655326616, 0.8262410133590513, 0.8517285631621542,
+    0.8758702495258178, 0.8988330272506132, 0.9207528972477227,
+    0.9417422977868534, 0.9618953844791897, 0.9812918896082028, 1.0
+  )
+  p <- c(0.1, 0.25, 0.5, 0.75, 0.9, 0.95, 0.99)
+  r <- qgpd_k1_cp(x, p)
+
+  # The Rust fit is in the near--1 band, so it reverts: CP == ML.
+  expect_true(r$revert2ml)
+  expect_equal(r$cp_quantiles, r$ml_quantiles, tolerance = 0)
+
+  # Not flat far above the data (the pre-fix curve was flat at ~3.92x).
+  expect_true(all(is.finite(r$cp_quantiles)))
+  expect_lte(max(r$cp_quantiles), 1.1 * max(x))
+
+  # Monotone non-decreasing in p.
+  expect_true(all(diff(r$cp_quantiles) >= -1e-12))
+
+  # The 1-in-100 CP quantile matches the reference tail (both revert to ML);
+  # reference value from tools/generate_gpd_smalln_negshape_golden.R.
+  expect_equal(r$cp_quantiles[length(p)], 0.99881215835152326, tolerance = 5e-2)
+})
+
+# ---------------------------------------------------------------------------
 # Phase B (Issues 1-4): the report's exact repro vectors.
 # ---------------------------------------------------------------------------
 
@@ -574,7 +613,7 @@ test_that("dgamma_cp matches the reference (shape, scale) DMGS CP pdf (Issue 5)"
   expect_true(all(is.finite(r$cp_pdf)))
 })
 
-test_that("dweibull_cp matches the reference DMGS CP pdf (Issue 5)", {
+test_that("dweibull_cp matches the reference DMGS CP pdf (Issue 5, item D1)", {
   x <- c(
     0.42, 1.87, 0.95, 3.21, 0.61, 2.44, 1.13, 0.78, 4.02, 1.55,
     0.33, 2.91, 1.02, 0.69, 3.77, 1.34, 0.51, 2.18, 0.88, 1.96,
@@ -583,13 +622,92 @@ test_that("dweibull_cp matches the reference DMGS CP pdf (Issue 5)", {
   y <- c(8.0, 9.0, 10.0, 11.0, 12.0)
   r <- dweibull_cp(x, y)
 
-  # Reference cp_pdf from tests/golden/cp_golden.json.
+  # Reference cp_pdf from tests/golden/cp_golden.json. Item D1: the reference
+  # `qweibull_cp` uses the prior slope c(-1/shape, -1/scale); the Rust Weibull
+  # now uses the same (it previously used the scale-only default c(0, -1/scale)).
   ref_cp <- c(
-    8.14135826736436807e-4, 2.43708333170712622e-4, 6.51230056512225384e-5,
-    1.54910764733113747e-5, 3.29082875144866584e-6
+    8.7424003446979082e-4, 2.5990819024402907e-4, 6.8900365797932683e-5,
+    1.6267682038521958e-5, 3.4334957013539562e-6
   )
-  # The Phase 5 ln_1p/exp_m1 rewrite keeps the residual below the pre-Phase-5
-  # 1.2e-6.
-  expect_equal(r$cp_pdf, ref_cp, tolerance = 1.2e-6)
+  expect_equal(r$cp_pdf, ref_cp, tolerance = 1e-5)
   expect_true(all(is.finite(r$cp_pdf)))
+})
+
+# ---------------------------------------------------------------------------
+# E1: `_p1`/`_p12` models require `t0` or `n0` (reference `maket0`).
+#
+# The reference `utils.py::maket0` raises when neither `t0` nor `n0` is
+# supplied. The bindings previously re-implemented `maket0` locally and
+# silently returned `0.0`, so a call with no prediction point was accepted.
+# They now delegate to the core `utils::maket0` and surface its error.
+# ---------------------------------------------------------------------------
+
+test_that("qgev_p1_cp errors when neither t0 nor n0 is supplied (E1)", {
+  x <- c(
+    -0.64966202, 0.85951881, 1.5996735, -0.48792225, 1.9369991, 0.53527898,
+    0.10262144, -0.23528281, -0.057837808, 1.7340061, 0.55865183, 0.076155367,
+    0.70099111, -0.14190081, 0.29518469, 0.62106268, 0.039215712, -1.3732916,
+    -0.094737048, 0.95002586, 1.4342304, 0.9058821, 0.75403608, 1.5581121,
+    0.13327821, 2.524211, 1.2288074, 0.61335529, 3.7228621, 1.1994391,
+    -1.1647551, 2.1560221, 1.3467322, 1.619274, 2.2680367, 2.0191889,
+    1.2164931, 1.171829, 1.0419927, -0.31710656
+  )
+  t <- seq(0.025, 1, 0.025)
+  p <- seq(0.1, 0.9, 0.1)
+  expect_error(
+    qgev_p1_cp(x, t, t0 = NA, n0 = NA, p = p),
+    "Either t0 or n0 must be specified"
+  )
+})
+
+test_that("qnorm_p1_cp errors when neither t0 nor n0 is supplied (E1)", {
+  x <- c(
+    -0.58645381, 0.26364332, -0.71562861, 1.7552808, 0.52950777, -0.58046838,
+    0.76742905, 1.0583247, 0.93578135, 0.094611613, 1.9517812, 0.86984324,
+    -0.10124058, -1.6546999, 1.7249309, 0.59506639, 0.66380974, 1.6638362,
+    1.5812212, 1.3939013, 1.7589774, 1.6621363, 0.99456498, -1.0293517, 1.6198257
+  )
+  t <- seq(0.04, 1, 0.04)
+  p <- seq(0.1, 0.9, 0.1)
+  expect_error(
+    qnorm_p1_cp(x, t, t0 = NA, n0 = NA, p = p),
+    "Either t0 or n0 must be specified"
+  )
+})
+
+test_that("qgev_p12_cp errors when neither t01/t02 nor n01/n02 is supplied (E1)", {
+  x <- c(
+    -0.9913480238809794, -0.9769235070688991, -0.8621908965345157,
+    -0.7398677117373739, -1.1516382552121482, -0.8197479252398926,
+    -0.7681271113256107, -1.3148460507732627, -0.47137556796826374,
+    -0.9640522997831006, -0.5531371188766323, -1.4151054520409128,
+    -1.2289727692687278, -1.7617925135393455, -0.6226462562363477,
+    -0.785745191074492, 1.4346107813099191, -1.269218100253865,
+    -2.0722151365158665, 6.571634964444661
+  )
+  t1 <- 1:20
+  t2 <- 11:30
+  p <- seq(0.1, 0.9, 0.1)
+  expect_error(
+    qgev_p12_cp(x, t1, t2, t01 = NA, t02 = NA, n01 = NA, n02 = NA, p = p),
+    "Either t0 or n0 must be specified"
+  )
+})
+
+test_that("qgev_p1_cp errors when both t0 and n0 are supplied (E1)", {
+  x <- c(
+    -0.64966202, 0.85951881, 1.5996735, -0.48792225, 1.9369991, 0.53527898,
+    0.10262144, -0.23528281, -0.057837808, 1.7340061, 0.55865183, 0.076155367,
+    0.70099111, -0.14190081, 0.29518469, 0.62106268, 0.039215712, -1.3732916,
+    -0.094737048, 0.95002586, 1.4342304, 0.9058821, 0.75403608, 1.5581121,
+    0.13327821, 2.524211, 1.2288074, 0.61335529, 3.7228621, 1.1994391,
+    -1.1647551, 2.1560221, 1.3467322, 1.619274, 2.2680367, 2.0191889,
+    1.2164931, 1.171829, 1.0419927, -0.31710656
+  )
+  t <- seq(0.025, 1, 0.025)
+  p <- seq(0.1, 0.9, 0.1)
+  expect_error(
+    qgev_p1_cp(x, t, t0 = 0.5, n0 = 10, p = p),
+    "Only one of t0 or n0 must be specified"
+  )
 })

@@ -19,7 +19,7 @@
 //! | `genpareto`      | `[scale, shape]`               | 0           | `[-1/σ, 0]`         |
 //! | `gumbel`         | `[loc, scale]`                 | 1           | `[0, -1/σ]`         |
 //! | `lnorm`          | `[meanlog, sdlog]`             | 1           | `[0, -1/σ]`         |
-//! | `weibull`        | `[shape, scale]`               | 1           | `[0, -1/σ]`         |
+//! | `weibull`        | `[shape, scale]`               | 1           | `[-1/k, -1/σ]`      |
 //! | `gamma`          | `[shape, rate]`                | 1           | `[0, -1/rate]`      |
 //! | `expon`          | `[rate]`                       | 0           | `[-1/rate]`         |
 //!
@@ -1156,6 +1156,25 @@ impl DmgsModel for Weibull {
         Weibull::quantile(self, p, params[0], params[1])
     }
 
+    /// The Weibull log-prior slope (reference `qweibull_cp` `lambdad_rhp`).
+    ///
+    /// The reference `qweibull_cp` uses `lambdad_rhp = c(-1/v1hat, -1/v2hat)`,
+    /// i.e. `[-1/shape, -1/scale]` — the **shape** component is `-1/shape`, not
+    /// `0`. This is the right-Haar prior for the Weibull's `(shape, scale)`
+    /// parameterization, `π(k, σ) ∝ 1/(k σ)` (see the reference `weibull_cp`
+    /// docs), whose log-slope is `(-1/k, -1/σ)`.
+    ///
+    /// The `DmgsModel` default is the scale-only right-Haar slope
+    /// `[0, -1/scale]`, which is **wrong** for the Weibull: it drops the
+    /// `-1/shape` term. That omission is the source of the ~3% (up to ~13% at
+    /// `p = 0.1`) CP residual at `n = 10` (item D1). With this override the Rust
+    /// DMGS CP matches the reference to machine precision (the remaining
+    /// difference is only the `O(1/n)` truncation, which the reference also
+    /// exhibits).
+    fn log_prior_slope(&self, params: &[f64]) -> Vec<f64> {
+        vec![-1.0 / params[0], -1.0 / params[1]]
+    }
+
     /// Analytic density first derivatives (reference `weibull_fd`).
     ///
     /// Phase 5 (Issue 5): all powers of `e1 = x/v2` are derived from a single
@@ -1681,6 +1700,12 @@ mod tests {
         let s = Gamma.log_prior_slope(&[2.0, 4.0]);
         assert_close(s[0], -0.5, RTOL, ATOL, "gamma slope[0]");
         assert_close(s[1], -4.0, RTOL, ATOL, "gamma slope[1]");
+        // weibull: reference `qweibull_cp` lambdad_rhp = c(-1/shape, -1/scale)
+        // (the right-Haar prior pi(k, sigma) ∝ 1/(k sigma)), NOT the scale-only
+        // default [0, -1/scale]. Item D1.
+        let s = Weibull.log_prior_slope(&[2.0, 4.0]);
+        assert_close(s[0], -0.5, RTOL, ATOL, "weibull slope[0]");
+        assert_close(s[1], -0.25, RTOL, ATOL, "weibull slope[1]");
         // norm_p1: [0, 0, -1/sigma]
         let s = NormalP1::default().log_prior_slope(&[0.0, 0.0, 2.0]);
         assert_close(s[2], -0.5, RTOL, ATOL, "norm_p1 slope[2]");

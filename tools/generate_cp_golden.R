@@ -76,6 +76,10 @@ y_gamma_outlier <- c(
   0.05, 0.08, 0.11, 0.14, 0.19, 0.23, 0.31, 0.42, 0.58, 0.77,
   1.05, 1.44, 2.10, 3.35, 5.90, 11.20, 24.50, 61.30, 180.40, 640.70
 )
+# Item D1: the n = 10 Weibull small-n case (first 10 values of y_positive).
+y_weibull_n10 <- c(
+  0.42, 1.87, 0.95, 3.21, 0.61, 2.44, 1.13, 0.78, 4.02, 1.55
+)
 
 # Prediction grid and probability levels (fixed).
 x_grid <- c(8.0, 9.0, 10.0, 11.0, 12.0)
@@ -223,6 +227,11 @@ models <- list()
 }
 
 # --- weibull (DMGS) ---------------------------------------------------------
+# The reference `qweibull_cp` uses `lambdad_rhp = c(-1/v1hat, -1/v2hat)`, i.e.
+# the right-Haar prior pi(k, sigma) ∝ 1/(k sigma) for the (shape, scale)
+# parameterization. The shape component is -1/shape, NOT 0. (Item D1: the
+# pre-fix generator used c(0, -1/v2), which matched the Rust default prior and
+# masked the ~3% n=10 residual.)
 {
   x <- y_positive
   nx <- length(x)
@@ -230,7 +239,7 @@ models <- list()
   v1 <- opt$par[1]; v2 <- opt$par[2]  # [shape, scale]
   ldd <- weibull_ldda(x, v1, v2); lddi <- solve(ldd)
   lddd <- weibull_lddda(x, v1, v2)
-  lambdad_rhp <- c(0, -1 / v2)
+  lambdad_rhp <- c(-1 / v1, -1 / v2)
   f1 <- weibull_f1fa(x_grid, v1, v2)
   f2 <- weibull_f2fa(x_grid, v1, v2)
   ml_pdf <- dweibull(x_grid, shape = v1, scale = v2)
@@ -247,6 +256,40 @@ models <- list()
     params = c(v1, v2), ml_pdf = ml_pdf, cp_pdf = cp_pdf,
     ml_quantiles = ml_q, cp_quantiles = cp_q,
     note = "DMGS (weibull_* + dmgs); params [shape, scale]"
+  )
+}
+
+# --- weibull_n10 (DMGS; item D1 small-n case) -------------------------------
+# The n = 10 Weibull case that exposed the ~3% CP residual (item D). The
+# residual was the wrong prior slope (c(0, -1/scale) instead of the reference
+# c(-1/shape, -1/scale)); with the corrected prior the Rust DMGS matches the
+# reference to machine precision. The dataset is the first 10 values of
+# y_positive (fixed literal, reproducible).
+{
+  x <- y_weibull_n10
+  nx <- length(x)
+  opt <- optim(c(1, 1), weibull_loglik, x = x, control = OPT_CTRL)
+  v1 <- opt$par[1]; v2 <- opt$par[2]  # [shape, scale]
+  ldd <- weibull_ldda(x, v1, v2); lddi <- solve(ldd)
+  lddd <- weibull_lddda(x, v1, v2)
+  lambdad_rhp <- c(-1 / v1, -1 / v2)
+  f1 <- weibull_f1fa(x_grid, v1, v2)
+  f2 <- weibull_f2fa(x_grid, v1, v2)
+  ml_pdf <- dweibull(x_grid, shape = v1, scale = v2)
+  df1 <- dmgs(lddi, lddd, f1, lambdad_rhp, f2, dim = 2)
+  cp_pdf <- pmax(ml_pdf + df1 / nx, 0)
+  alpha <- 1 - p_grid
+  ml_q <- qweibull(1 - alpha, shape = v1, scale = v2)
+  mu1 <- weibull_mu1fa(alpha, v1, v2)
+  mu2 <- weibull_mu2fa(alpha, v1, v2)
+  fhat <- dweibull(ml_q, shape = v1, scale = v2)
+  dq <- dmgs(lddi, lddd, mu1, lambdad_rhp, mu2, dim = 2)
+  cp_q <- ml_q + dq / (nx * fhat)
+  models$weibull_n10 <- list(
+    params = c(v1, v2), ml_pdf = ml_pdf, cp_pdf = cp_pdf,
+    ml_quantiles = ml_q, cp_quantiles = cp_q,
+    note = paste("item D1 n=10 Weibull; DMGS (weibull_* + dmgs);",
+                 "reference prior c(-1/shape,-1/scale); params [shape, scale]")
   )
 }
 
@@ -348,7 +391,8 @@ lines <- c(lines, "  },")
 lines <- c(lines, '  "datasets": {')
 lines <- c(lines, paste0('    "y_general": ', json_vec(y_general), ","))
 lines <- c(lines, paste0('    "y_positive": ', json_vec(y_positive), ","))
-lines <- c(lines, paste0('    "y_gamma_outlier": ', json_vec(y_gamma_outlier)))
+lines <- c(lines, paste0('    "y_gamma_outlier": ', json_vec(y_gamma_outlier), ","))
+lines <- c(lines, paste0('    "y_weibull_n10": ', json_vec(y_weibull_n10)))
 lines <- c(lines, "  }")
 lines <- c(lines, "}")
 
