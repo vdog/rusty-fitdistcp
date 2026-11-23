@@ -127,8 +127,18 @@ impl GenPareto {
     /// output. The `v2hat > 30` clause (Issue 2, Phase 2) guards the
     /// large-positive-shape case where `lddi` cannot be computed and the code
     /// would otherwise crash / return `NaN`.
+    ///
+    /// **Issue 2 re-check (item C1):** the guard also reverts for a shape
+    /// **approaching −1 from above** (`shape <= -0.98`, via
+    /// [`crate::models::near_minus_one_shape`]). The reference's `optim` never
+    /// lands in the narrow `(-1, -0.98)` band, but the Rust multi-start does; at
+    /// such a shape the DMGS `1/fhat` term blows up, the CP quantiles leave the
+    /// support, and the monotone guard flattens the curve far above the data
+    /// (the reported `n = 20` case: `19.8` vs the reference `2.06`). Reverting to
+    /// the MLE output reproduces the reference's behaviour on that case. See
+    /// [`crate::models::GPD_NEAR_MINUS_ONE_DELTA`] for the calibration.
     pub fn revert2ml(&self, shape: f64) -> bool {
-        shape.abs() >= 1.0 || shape > 30.0
+        shape.abs() >= 1.0 || shape > 30.0 || crate::models::near_minus_one_shape(shape)
     }
 }
 
@@ -491,7 +501,6 @@ mod tests {
         let m = GenPareto;
         assert!(!m.revert2ml(0.0));
         assert!(!m.revert2ml(0.5));
-        assert!(!m.revert2ml(-0.99));
         assert!(m.revert2ml(1.0));
         assert!(m.revert2ml(-1.0));
         assert!(m.revert2ml(1.5));
@@ -501,5 +510,26 @@ mod tests {
         assert!(m.revert2ml(30.0));
         assert!(m.revert2ml(30.5));
         assert!(m.revert2ml(100.0));
+    }
+
+    #[test]
+    fn revert2ml_fires_near_minus_one() {
+        // Issue 2 re-check (item C1): the near-−1 DMGS blow-up band must revert.
+        // The threshold is `shape <= -1 + GPD_NEAR_MINUS_ONE_DELTA` = `-0.98`.
+        let m = GenPareto;
+        // Inside the blow-up band (the reported n = 20 fitted shapes ~ -0.987).
+        assert!(m.revert2ml(-0.987));
+        assert!(m.revert2ml(-0.99));
+        assert!(m.revert2ml(-0.985));
+        // Exactly at the threshold reverts (`<=`).
+        assert!(m.revert2ml(-0.98));
+        // Just above the threshold does NOT revert (legitimate fits).
+        assert!(!m.revert2ml(-0.979));
+        assert!(!m.revert2ml(-0.95));
+        assert!(!m.revert2ml(-0.9));
+        assert!(!m.revert2ml(-0.5));
+        // The shared helper agrees with the guard.
+        assert!(crate::models::near_minus_one_shape(-0.987));
+        assert!(!crate::models::near_minus_one_shape(-0.95));
     }
 }

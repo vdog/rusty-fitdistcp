@@ -291,16 +291,15 @@ def test_gev_ppf_fields_and_extras():
     assert np.all(np.isfinite(res["cp_quantiles"]))
 
 
-def test_gev_smalln_cp_quantiles_clamped_to_support():
-    """Phase 4 (Issue 4): the GEV CP quantiles are clamped to the support.
+def test_gev_smalln_cp_quantiles_not_clamped_to_support():
+    """Issue 2 re-check (item A): the GEV CP quantiles are NOT clamped.
 
-    At small n the DMGS expansion can push a CP quantile outside the GEV
-    support (e.g. a negative 1-in-100 return level for a positive-support fit).
-    The core now clamps to the support bound (the reference `fixgevrange`) and
-    falls back to the MLE quantile when a CP quantile still leaves the support.
+    The reference `qgev_cp` does not clamp `rh_flat_quantiles` to `ml_max`; an
+    earlier Rust revision did, which biased the upper tail low. The clamp has
+    been removed, so the CP tail may exceed `ml_max`.
 
-    The `y_smalln_clamp` dataset (n = 20) is the defect case: its raw DMGS CP
-    quantile at p = 0.99 exceeds `ml_max`, so the clamp is genuinely exercised.
+    The `y_smalln_clamp` dataset (n = 20) is the case whose raw DMGS CP quantile
+    at p = 0.99 exceeds `ml_max`; the Rust output must now match that raw value.
     """
     y = np.array([
         1.27, 1.37, 1.57, 1.91, 1.20, 1.90, 1.94, 1.66, 1.63, 1.06,
@@ -315,17 +314,17 @@ def test_gev_smalln_cp_quantiles_clamped_to_support():
     ml_max = float(res["ml_max"])
     assert np.isfinite(ml_max)
 
-    # Every CP quantile is finite and within the support.
+    # Every CP quantile is finite (it is intentionally NOT clamped to `ml_max`).
     cp_q = np.asarray(res["cp_quantiles"])
     assert np.all(np.isfinite(cp_q))
-    assert np.all(cp_q <= ml_max + 1e-9)
 
-    # The 1-in-100 return level (p = 0.99) is finite, within support, and
-    # non-negative (the Issue 4 defect was a negative return level).
+    # The 1-in-100 return level (p = 0.99) is finite and non-negative (the
+    # Issue 4 defect was a negative return level), and it exceeds `ml_max`
+    # (the reference CP tail is above the ML upper endpoint).
     q100 = float(cp_q[-1])
     assert np.isfinite(q100)
     assert q100 >= 0.0
-    assert q100 <= ml_max + 1e-9
+    assert q100 > ml_max
 
 
 def test_gev_short_record_fit_is_robust():
@@ -449,15 +448,20 @@ def test_gamma_cp_pdf_matches_reference_shape_scale():
 
 
 def test_weibull_cp_pdf_matches_reference():
-    """Phase 5 (Issue 5): the Weibull ln_1p/exp_m1 rewrite keeps the CP pdf
-    residual below the pre-Phase-5 1.2e-6."""
+    """Item D1: the Weibull CP pdf matches the reference DMGS CP pdf.
+
+    The reference `qweibull_cp` uses the prior slope `c(-1/shape, -1/scale)`;
+    the Rust `Weibull` now uses the same (it previously used the scale-only
+    default `c(0, -1/scale)`, which produced a ~3% residual at n = 10). The
+    reference cp_pdf below is the corrected value from
+    tests/golden/cp_golden.json (regenerated with the reference prior)."""
     res = rusty_fitdistcp.pdf_weibull(Y_POSITIVE_GOLDEN, X_GRID_GOLDEN)
-    # Reference cp_pdf from tests/golden/cp_golden.json.
+    # Reference cp_pdf from tests/golden/cp_golden.json (reference prior).
     ref_cp = np.array([
-        8.14135826736436807e-4, 2.43708333170712622e-4, 6.51230056512225384e-5,
-        1.54910764733113747e-5, 3.29082875144866584e-6,
+        8.7424003446979082e-4, 2.5990819024402907e-4, 6.8900365797932683e-5,
+        1.6267682038521958e-5, 3.4334957013539562e-6,
     ])
-    np.testing.assert_allclose(res["cp_pdf"], ref_cp, rtol=1.2e-6, atol=1e-12)
+    np.testing.assert_allclose(res["cp_pdf"], ref_cp, rtol=1e-5, atol=1e-10)
 
 
 # ---------------------------------------------------------------------------
@@ -476,7 +480,8 @@ T_NORM_P1 = np.arange(0.04, 1.0 + 1e-9, 0.04)
 
 def test_norm_p1_accepts_predictor_args():
     t = np.linspace(0.0, 1.0, Y.size)
-    res = rusty_fitdistcp.ppf_norm_p1(X, P, t=t, t0=0.0, n0=1.0)
+    # E1: exactly one of `t0`/`n0` must be supplied (reference `maket0`).
+    res = rusty_fitdistcp.ppf_norm_p1(X, P, t=t, t0=0.0)
     assert res["ml_params"].shape == (3,)
     assert np.all(np.isfinite(res["cp_quantiles"]))
 
@@ -505,7 +510,8 @@ def test_norm_p1_predictor_semantics():
 
 def test_gev_p1_accepts_predictor_args():
     t = np.linspace(0.0, 1.0, Y_GEV.size)
-    res = rusty_fitdistcp.pdf_gev_p1(X, Y_GEV, t=t, t0=0.0, n0=1.0)
+    # E1: exactly one of `t0`/`n0` must be supplied (reference `maket0`).
+    res = rusty_fitdistcp.pdf_gev_p1(X, Y_GEV, t=t, t0=0.0)
     assert res["ml_params"].shape == (4,)
     # `ml_pdf` is evaluated at the prediction grid `y` (length matches `y`).
     assert res["ml_pdf"].shape == Y_GEV.shape
@@ -548,6 +554,58 @@ def test_gev_p12_predictor_semantics():
     assert "adjustedx" in res
     assert np.all(np.isfinite(res["ml_params"]))
     assert np.all(np.isfinite(res["cp_quantiles"]))
+
+
+# ---------------------------------------------------------------------------
+# E1: `_p1`/`_p12` models require `t0` or `n0` (reference `maket0`).
+#
+# The reference `utils.py::maket0` raises when neither `t0` nor `n0` is
+# supplied. The bindings previously re-implemented `maket0` locally and
+# silently returned `0.0`, so a call with no prediction point was accepted.
+# They now delegate to the core `utils::maket0` and surface its error.
+# ---------------------------------------------------------------------------
+
+# The exact reference message text (reference `utils.py::maket0`).
+MAKET0_NEITHER_MSG = "Either t0 or n0 must be specified"
+MAKET0_BOTH_MSG = "Only one of t0 or n0 must be specified"
+
+
+def test_genextreme_p1_requires_t0_or_n0():
+    """`genextreme_p1.ppf` without `t0`/`n0` raises the reference error."""
+    t = np.linspace(0.0, 1.0, Y_GEV.size)
+    with pytest.raises(ValueError, match=MAKET0_NEITHER_MSG):
+        rusty_fitdistcp.genextreme_p1.ppf(X, t)
+
+
+def test_norm_p1_requires_t0_or_n0():
+    """`norm_p1.ppf` without `t0`/`n0` raises the reference error."""
+    t = np.linspace(0.0, 1.0, Y.size)
+    with pytest.raises(ValueError, match=MAKET0_NEITHER_MSG):
+        rusty_fitdistcp.ppf_norm_p1(X, P, t=t)
+
+
+def test_genextreme_p12_requires_t0_or_n0():
+    """`genextreme_p12.ppf` without `t01`/`t02`/`n01`/`n02` raises."""
+    x = np.array([
+        -0.9913480238809794, -0.9769235070688991, -0.8621908965345157,
+        -0.7398677117373739, -1.1516382552121482, -0.8197479252398926,
+        -0.7681271113256107, -1.3148460507732627, -0.47137556796826374,
+        -0.9640522997831006, -0.5531371188766323, -1.4151054520409128,
+        -1.2289727692687278, -1.7617925135393455, -0.6226462562363477,
+        -0.785745191074492, 1.4346107813099191, -1.269218100253865,
+        -2.0722151365158665, 6.571634964444661,
+    ])
+    t1 = np.arange(1, 21, dtype=float)
+    t2 = np.arange(11, 31, dtype=float)
+    with pytest.raises(ValueError, match=MAKET0_NEITHER_MSG):
+        rusty_fitdistcp.genextreme_p12.ppf(x, t1, t2)
+
+
+def test_genextreme_p1_rejects_both_t0_and_n0():
+    """Supplying both `t0` and `n0` raises the reference error."""
+    t = np.linspace(0.0, 1.0, Y_GEV.size)
+    with pytest.raises(ValueError, match=MAKET0_BOTH_MSG):
+        rusty_fitdistcp.genextreme_p1.ppf(X, t, t0=0.5, n0=10.0)
 
 
 # ---------------------------------------------------------------------------
@@ -640,6 +698,46 @@ def test_gpd_dollar_scale_cp_quantiles_match_reference():
         ]
     )
     np.testing.assert_allclose(r["cp_quantiles"], ref_cp, rtol=1e-6, atol=1e-10)
+
+
+# ---------------------------------------------------------------------------
+# Issue 2 re-check (item C1): GPD at small n with the ML shape near -1.
+# ---------------------------------------------------------------------------
+
+
+def test_gpd_smalln_negshape_reverts_and_is_not_flat():
+    """GPD n = 20 with ML shape near -1 reverts to the ML curve (item C1).
+
+    Before item C1 the Rust multi-start landed at a shape just above -1
+    (e.g. -0.987), which the reference `revert2ml` does not catch; the DMGS
+    `1/fhat` term then blew up and the monotone guard flattened the CP curve far
+    above the data (the reported n = 20 case: 19.8 vs the reference 2.06). The
+    fix widens the revert to `shape <= -0.98`, so the CP output equals the ML
+    output and stays bounded by the data.
+    """
+    fx = _load_golden("gpd_smalln_negshape_golden.json")
+    y = np.array(fx["datasets"]["y_negshape_big"], dtype=float)
+    p = np.array(fx["p_grid"], dtype=float)
+    ref = fx["models"]["genpareto_negshape_big"]
+
+    r = rusty_fitdistcp.ppf_gpd_k1(y, p)
+
+    # The reference reverts on this record (its MLE shape is below -1).
+    assert ref["revert2ml"] is True
+
+    # The Rust fit is in the near--1 band, so it reverts: CP == ML.
+    assert r["revert2ml"] is True
+    np.testing.assert_allclose(r["cp_quantiles"], r["ml_quantiles"], rtol=0, atol=0)
+
+    # Not flat far above the data (the pre-fix curve was flat at ~3.92x).
+    assert np.all(np.isfinite(r["cp_quantiles"]))
+    assert r["cp_quantiles"].max() <= 1.1 * y.max()
+
+    # Monotone non-decreasing in p.
+    assert np.all(np.diff(r["cp_quantiles"]) >= -1e-12)
+
+    # The 1-in-100 CP quantile matches the reference tail (both revert to ML).
+    assert r["cp_quantiles"][-1] == pytest.approx(ref["cp_quantiles"][-1], rel=5e-2)
 
 
 # ---------------------------------------------------------------------------

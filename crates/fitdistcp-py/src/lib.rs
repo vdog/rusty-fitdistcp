@@ -153,24 +153,26 @@ fn make_request(
 }
 
 /// The reference `maket0`: resolve the prediction point `t0` from the user's
-/// `t0`/`n0` (W14).
+/// `t0`/`n0` (W14, E1).
+///
+/// Delegates to the core [`fitdistcp_core::utils::maket0`] so the reference
+/// error semantics are preserved:
 ///
 /// - if `t0` is supplied, use it directly (`n0` must be absent);
 /// - otherwise `t0 = t[n0]` where `n0` is a **1-based positional index** into
 ///   `t` (the reference `maket0(NA, n0, t) = t[n0]`).
 ///
-/// Returns `0.0` when neither is supplied or when `t` is empty.
-fn maket0(t: &[f64], t0: Option<f64>, n0: Option<f64>) -> f64 {
-    if let Some(v) = t0 {
-        return v;
-    }
-    if let Some(idx) = n0 {
-        let i = idx.round() as isize;
-        if i >= 1 && (i as usize) <= t.len() {
-            return t[i as usize - 1];
-        }
-    }
-    0.0
+/// # Errors
+///
+/// Returns a [`PyValueError`] carrying the reference message text when neither
+/// `t0` nor `n0` is supplied (`"Either t0 or n0 must be specified"`), when both
+/// are supplied (`"Only one of t0 or n0 must be specified"`), or when `n0` is
+/// out of range for `t`. Previously this helper silently returned `0.0`, which
+/// let `genextreme_p1`/`norm_p1`/`genextreme_p12` accept a call with no
+/// prediction point — the reference raises instead.
+fn maket0(t: &[f64], t0: Option<f64>, n0: Option<f64>) -> PyResult<f64> {
+    fitdistcp_core::utils::maket0(t0, n0, t)
+        .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))
 }
 
 /// Decenter a `_p1` [`FitResult`]'s `ml_params`/`cp_params` intercept.
@@ -429,6 +431,8 @@ fn base_dict<'py>(py: Python<'py>, r: &FitResult) -> PyResult<Bound<'py, PyDict>
     d.set_item("small_n", r.small_n)?;
     // Phase A (Issue 4): whether the CP-quantile monotonicity guard fired.
     d.set_item("cp_monotone_clamped", r.cp_monotone_clamped)?;
+    // Issue 2 re-check (item B2): whether the fit is degenerate (CP output NaN).
+    d.set_item("degenerate_fit", r.degenerate_fit)?;
     Ok(d)
 }
 
@@ -1396,7 +1400,10 @@ fn ppf_genpareto_ref<'py>(
         f64::INFINITY
     };
     d.set_item("ml_max", ml_max)?;
-    d.set_item("revert2ml", shape.abs() >= 1.0 || shape > 30.0)?;
+    // Item C1: report the core `revert2ml` predicate (which now also fires for
+    // a shape approaching -1 from above), so the flag matches the CP output
+    // produced by `predict_gpd`.
+    d.set_item("revert2ml", GenPareto.revert2ml(shape))?;
     d.set_item("lp_quantiles", EXTRAMODELS_NOT_SELECTED)?;
     d.set_item("lp2_quantiles", EXTRAMODELS_NOT_SELECTED)?;
     d.set_item("dpi_quantiles", EXTRAMODELS_NOT_SELECTED)?;
@@ -1550,7 +1557,7 @@ fn ppf_genextreme_p1_ref<'py>(
         Some(v) => v.as_slice()?.to_vec(),
         None => (1..10).map(|i| i as f64 * 0.1).collect(),
     };
-    let t0 = maket0(&t, t0, n0);
+    let t0 = maket0(&t, t0, n0)?;
     let model = GenExtremeP1::new(t, t0, n0.unwrap_or(1.0));
     let mean_t = model.mean_t();
     let req = make_request(x.clone(), x.clone(), p, None, None, None, None);
@@ -1628,7 +1635,7 @@ fn pdf_genextreme_p1_ref<'py>(
         Some(v) => v.as_slice()?.to_vec(),
         None => x.clone(),
     };
-    let t0 = maket0(&t, t0, n0);
+    let t0 = maket0(&t, t0, n0)?;
     let model = GenExtremeP1::new(t, t0, n0.unwrap_or(1.0));
     let mean_t = model.mean_t();
     let req = make_request(x, y, vec![0.5], None, None, None, None);
@@ -1681,7 +1688,7 @@ fn cdf_genextreme_p1_ref<'py>(
         Some(v) => v.as_slice()?.to_vec(),
         None => x.clone(),
     };
-    let t0 = maket0(&t, t0, n0);
+    let t0 = maket0(&t, t0, n0)?;
     let model = GenExtremeP1::new(t, t0, n0.unwrap_or(1.0));
     let mean_t = model.mean_t();
     let req = make_request(x, y.clone(), vec![0.5], None, None, None, None);
@@ -1727,7 +1734,7 @@ fn rvs_genextreme_p1_ref<'py>(
         d.set_item("cp_method", CRHPFLAT_DMGS_CPMETHOD)?;
         return Ok(d);
     }
-    let t0 = maket0(&t, t0, n0);
+    let t0 = maket0(&t, t0, n0)?;
     let model = GenExtremeP1::new(t, t0, n0.unwrap_or(1.0));
     let mean_t = model.mean_t();
     let p = rvs_uniform_probs(py, n)?;
@@ -1792,8 +1799,8 @@ fn ppf_genextreme_p12_ref<'py>(
         Some(v) => v.as_slice()?.to_vec(),
         None => (1..10).map(|i| i as f64 * 0.1).collect(),
     };
-    let t01 = maket0(&t1, t01, n01);
-    let t02 = maket0(&t2, t02, n02);
+    let t01 = maket0(&t1, t01, n01)?;
+    let t02 = maket0(&t2, t02, n02)?;
     let model = GenExtremeP12::new(t1, t2, t01, t02, n01.unwrap_or(1.0), n02.unwrap_or(1.0));
     let mean_t1 = model.mean_t1();
     let mean_t2 = model.mean_t2();
@@ -1877,8 +1884,8 @@ fn pdf_genextreme_p12_ref<'py>(
         Some(v) => v.as_slice()?.to_vec(),
         None => x.clone(),
     };
-    let t01 = maket0(&t1, t01, n01);
-    let t02 = maket0(&t2, t02, n02);
+    let t01 = maket0(&t1, t01, n01)?;
+    let t02 = maket0(&t2, t02, n02)?;
     let model = GenExtremeP12::new(t1, t2, t01, t02, n01.unwrap_or(1.0), n02.unwrap_or(1.0));
     let mean_t1 = model.mean_t1();
     let mean_t2 = model.mean_t2();
@@ -1937,8 +1944,8 @@ fn cdf_genextreme_p12_ref<'py>(
         Some(v) => v.as_slice()?.to_vec(),
         None => x.clone(),
     };
-    let t01 = maket0(&t1, t01, n01);
-    let t02 = maket0(&t2, t02, n02);
+    let t01 = maket0(&t1, t01, n01)?;
+    let t02 = maket0(&t2, t02, n02)?;
     let model = GenExtremeP12::new(t1, t2, t01, t02, n01.unwrap_or(1.0), n02.unwrap_or(1.0));
     let mean_t1 = model.mean_t1();
     let mean_t2 = model.mean_t2();
@@ -1990,8 +1997,8 @@ fn rvs_genextreme_p12_ref<'py>(
         d.set_item("cp_method", CRHPFLAT_DMGS_CPMETHOD)?;
         return Ok(d);
     }
-    let t01 = maket0(&t1, t01, n01);
-    let t02 = maket0(&t2, t02, n02);
+    let t01 = maket0(&t1, t01, n01)?;
+    let t02 = maket0(&t2, t02, n02)?;
     let model = GenExtremeP12::new(t1, t2, t01, t02, n01.unwrap_or(1.0), n02.unwrap_or(1.0));
     let mean_t1 = model.mean_t1();
     let mean_t2 = model.mean_t2();
@@ -2195,7 +2202,7 @@ fn ppf_norm_p1<'py>(
         .transpose()?
         .unwrap_or_default();
     let _ = means;
-    let t0 = maket0(&t, t0, n0);
+    let t0 = maket0(&t, t0, n0)?;
     let model = NormalP1::new(t, t0, n0.unwrap_or(1.0));
     let mean_t = model.mean_t();
     let req = make_request(x.clone(), x, p, None, None, None, None);
@@ -2222,7 +2229,7 @@ fn pdf_norm_p1<'py>(
         .transpose()?
         .unwrap_or_default();
     let _ = means;
-    let t0 = maket0(&t, t0, n0);
+    let t0 = maket0(&t, t0, n0)?;
     let model = NormalP1::new(t, t0, n0.unwrap_or(1.0));
     let mean_t = model.mean_t();
     // Data `x` first (→ `req.y`), grid `y` second (→ `req.x`); see `pdf_norm`.
@@ -2250,7 +2257,7 @@ fn cdf_norm_p1<'py>(
         .transpose()?
         .unwrap_or_default();
     let _ = means;
-    let t0 = maket0(&t, t0, n0);
+    let t0 = maket0(&t, t0, n0)?;
     let model = NormalP1::new(t, t0, n0.unwrap_or(1.0));
     let mean_t = model.mean_t();
     let req = make_request(y.clone(), x, vec![0.5], None, None, None, None);
@@ -2276,7 +2283,7 @@ fn rvs_norm_p1<'py>(
         .transpose()?
         .unwrap_or_default();
     let _ = means;
-    let t0 = maket0(&t, t0, n0);
+    let t0 = maket0(&t, t0, n0)?;
     let model = NormalP1::new(t, t0, n0.unwrap_or(1.0));
     let mean_t = model.mean_t();
     let p = rvs_probs(n.max(1));
@@ -2403,7 +2410,7 @@ fn ppf_gev_p1<'py>(
         .transpose()?
         .unwrap_or_default();
     let _ = means;
-    let t0 = maket0(&t, t0, n0);
+    let t0 = maket0(&t, t0, n0)?;
     let model = GenExtremeP1::new(t, t0, n0.unwrap_or(1.0));
     let mean_t = model.mean_t();
     let req = make_request(x.clone(), x, p, None, None, None, None);
@@ -2440,7 +2447,7 @@ fn pdf_gev_p1<'py>(
         .transpose()?
         .unwrap_or_default();
     let _ = means;
-    let t0 = maket0(&t, t0, n0);
+    let t0 = maket0(&t, t0, n0)?;
     let model = GenExtremeP1::new(t, t0, n0.unwrap_or(1.0));
     let mean_t = model.mean_t();
     // Data `x` first (→ `req.y`), grid `y` second (→ `req.x`); see `pdf_norm`.
@@ -2474,7 +2481,7 @@ fn cdf_gev_p1<'py>(
         .transpose()?
         .unwrap_or_default();
     let _ = means;
-    let t0 = maket0(&t, t0, n0);
+    let t0 = maket0(&t, t0, n0)?;
     let model = GenExtremeP1::new(t, t0, n0.unwrap_or(1.0));
     let mean_t = model.mean_t();
     let req = make_request(y.clone(), x, vec![0.5], None, None, None, None);
@@ -2508,7 +2515,7 @@ fn rvs_gev_p1<'py>(
         .transpose()?
         .unwrap_or_default();
     let _ = means;
-    let t0 = maket0(&t, t0, n0);
+    let t0 = maket0(&t, t0, n0)?;
     let model = GenExtremeP1::new(t, t0, n0.unwrap_or(1.0));
     let mean_t = model.mean_t();
     let p = rvs_probs(n.max(1));

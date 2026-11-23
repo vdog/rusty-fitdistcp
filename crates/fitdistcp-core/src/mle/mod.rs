@@ -121,7 +121,7 @@ pub fn fit_with_config<M: Derivatives>(
     );
     assert!(!y.is_empty(), "fit: y must be non-empty");
 
-    // --- Multi-start set (Phase 3, Issue 3). ---
+    // --- Multi-start set (Phase 3, Issue 3; gated by item F1). ---
     //
     // The hand-rolled BFGS can stall on the GEV/GPD/Gumbel ridges and stop at a
     // worse fit than the reference's `scipy`/`optim` multi-start strategy. We
@@ -137,7 +137,22 @@ pub fn fit_with_config<M: Derivatives>(
     // Each start is run through BFGS (primary) and Newton–Raphson (fallback),
     // and the best candidate across the whole set wins. This is the reference's
     // robust multi-start / init strategy.
-    let starts = build_starts(model, y, init);
+    //
+    // Issue 2 re-check (item F1): the multi-start set, the second Newton run,
+    // and the Nelder–Mead polish are **wasted work** for models with a
+    // well-conditioned closed-form likelihood (Normal, Log-normal, Exponential,
+    // Normal `_p1`). Those models override [`Derivatives::needs_multistart`] to
+    // `false`; for them we run the pre-Phase-3 single-start path: one BFGS from
+    // the caller's `init` plus one Newton–Raphson fallback, no `setics` start,
+    // no second Newton run, and no Nelder–Mead polish. The default is `true`, so
+    // every other model keeps the full robust path (the Phase 3 fix is
+    // preserved).
+    let multistart = model.needs_multistart();
+    let starts = if multistart {
+        build_starts(model, y, init)
+    } else {
+        vec![init.to_vec()]
+    };
 
     // Candidate solutions, each with its log-likelihood, convergence status, and
     // the start that produced it.
@@ -179,6 +194,15 @@ pub fn fit_with_config<M: Derivatives>(
         // local maximum, so the observed information is positive-definite and
         // the `bfgs_ok` test passes), while Newton started from the start
         // reliably reaches the true optimum.
+        //
+        // Item F1: this is the **pre-Phase-3 single-start path** for analytic
+        // models — one BFGS plus **both** Newton runs (from the BFGS result and
+        // from the caller's `init`). The Newton-from-init run is what rescues a
+        // fit whose BFGS landed on a spurious large-scale stationary point (e.g.
+        // the `norm` repro vector with an outlier, or `lnorm`), so it must be
+        // kept even on the fast path. What the fast path skips is the extra
+        // `setics` start and the Nelder–Mead polish, which are the multi-start
+        // machinery proper.
         let newton_from_bfgs = newton_raphson(model, y, &bfgs.params, cfg);
         let newton_from_start = newton_raphson(model, y, start, cfg);
         for opt in [&newton_from_bfgs, &newton_from_start] {
@@ -201,14 +225,18 @@ pub fn fit_with_config<M: Derivatives>(
         // on the gradient and can follow a curved ridge. We polish from the
         // best point found so far for this start (BFGS result if finite,
         // otherwise the start itself).
-        let polish_from = if bfgs.params.iter().all(|v| v.is_finite())
-            && model.loglik(&bfgs.params, y).is_finite()
-        {
-            bfgs.params.clone()
-        } else {
-            start.clone()
-        };
-        if cfg.max_iter > 0 {
+        //
+        // Item F1: the Nelder–Mead polish is part of the robust multi-start
+        // strategy and is skipped for analytic models (`needs_multistart() ==
+        // false`), whose BFGS/Newton optimum needs no gradient-free refinement.
+        if multistart && cfg.max_iter > 0 {
+            let polish_from = if bfgs.params.iter().all(|v| v.is_finite())
+                && model.loglik(&bfgs.params, y).is_finite()
+            {
+                bfgs.params.clone()
+            } else {
+                start.clone()
+            };
             let nm = nelder_mead(model, y, &polish_from, cfg);
             let nm_ll = model.loglik(&nm.params, y);
             if nm_ll.is_finite() {
@@ -222,9 +250,14 @@ pub fn fit_with_config<M: Derivatives>(
         }
     }
 
+    // Issue 2 re-check (item B1): the selection predicate is the **data-aware**
+    // `valid_params_for`, so a relative guard (the GEV scale floor) can reject a
+    // degenerate `scale -> 0` candidate that would otherwise win on a spuriously
+    // high log-likelihood. Models that only need a data-independent guard are
+    // unaffected (the default delegates to `valid_params`).
     let (params, convergence, start) = if let Some(best) = candidates
         .into_iter()
-        .filter(|c| c.loglik.is_finite() && model.valid_params(&c.params))
+        .filter(|c| c.loglik.is_finite() && model.valid_params_for(&c.params, y))
         .max_by(|a, b| {
             // Primary key: higher log-likelihood. Secondary key: prefer a
             // converged status on (near-)ties. This is the tightened acceptance
@@ -1131,5 +1164,157 @@ mod tests {
         let inv = invert_symmetric(&info).unwrap();
         assert_close(fit.ml_se[0], inv[(0, 0)].sqrt(), RTOL, ATOL, "se_mu inv");
         assert_close(fit.ml_se[1], inv[(1, 1)].sqrt(), RTOL, ATOL, "se_sigma inv");
+    }
+
+    // --- Issue 2 re-check, item F1: multi-start gating ---------------------
+
+    /// A Gaussian model that counts `loglik` evaluations, so a test can observe
+    /// how many optimizer passes `fit_with_config` runs. `multistart` selects
+    /// whether it opts into the robust multi-start path.
+    struct CountingGaussian {
+        multistart: bool,
+        calls: std::cell::Cell<usize>,
+    }
+
+    impl CountingGaussian {
+        fn new(multistart: bool) -> Self {
+            Self {
+                multistart,
+                calls: std::cell::Cell::new(0),
+            }
+        }
+    }
+
+    impl Derivatives for CountingGaussian {
+        fn loglik(&self, params: &[f64], y: &[f64]) -> f64 {
+            self.calls.set(self.calls.get() + 1);
+            Gaussian.loglik(params, y)
+        }
+
+        fn n_params(&self) -> usize {
+            2
+        }
+
+        fn needs_multistart(&self) -> bool {
+            self.multistart
+        }
+
+        fn score(&self, params: &[f64], y: &[f64]) -> Vec<f64> {
+            Gaussian.score(params, y)
+        }
+
+        fn hessian(&self, params: &[f64], y: &[f64]) -> Vec<f64> {
+            Gaussian.hessian(params, y)
+        }
+
+        /// A non-trivial `setics` so the multi-start set has a second start to
+        /// run (otherwise the set collapses to `init` and the call-count
+        /// difference would be smaller).
+        fn setics(&self, y: &[f64], init: &[f64]) -> Vec<f64> {
+            let mean = y.iter().sum::<f64>() / y.len() as f64;
+            let sd = (y.iter().map(|&v| (v - mean).powi(2)).sum::<f64>() / y.len() as f64).sqrt();
+            if sd > 0.0 {
+                vec![mean, sd]
+            } else {
+                init.to_vec()
+            }
+        }
+    }
+
+    #[test]
+    fn analytic_model_takes_single_start_fast_path() {
+        // Item F1: a model with `needs_multistart() == false` must run the
+        // single-start path (one BFGS + one Newton fallback, no `setics` start,
+        // no second Newton run, no Nelder–Mead polish), so it evaluates the
+        // log-likelihood strictly fewer times than the same model on the
+        // multi-start path.
+        let y = sample();
+
+        let fast = CountingGaussian::new(false);
+        let fast_fit = fit(&fast, &y, &[0.0, 1.0]);
+        let fast_calls = fast.calls.get();
+
+        let robust = CountingGaussian::new(true);
+        let robust_fit = fit(&robust, &y, &[0.0, 1.0]);
+        let robust_calls = robust.calls.get();
+
+        assert!(
+            fast_calls < robust_calls,
+            "single-start path should evaluate loglik fewer times: \
+             fast = {fast_calls}, robust = {robust_calls}"
+        );
+
+        // Both paths must reach the same optimum (the fast path is a pure
+        // performance change, not a numerical one).
+        assert_eq!(fast_fit.convergence, Convergence::Converged);
+        assert_eq!(robust_fit.convergence, Convergence::Converged);
+        let (mean, sigma, _, _, _) = analytic_gaussian(&y);
+        assert_close(fast_fit.ml_params[0], mean, OPT_RTOL, OPT_ATOL, "mu (fast)");
+        assert_close(
+            fast_fit.ml_params[1],
+            sigma,
+            OPT_RTOL,
+            OPT_ATOL,
+            "sigma (fast)",
+        );
+        assert_close(
+            fast_fit.loglik,
+            robust_fit.loglik,
+            OPT_RTOL,
+            OPT_ATOL,
+            "loglik (fast vs robust)",
+        );
+    }
+
+    #[test]
+    fn needs_multistart_is_false_for_analytic_models() {
+        // Item F1: the closed-form models opt out of the multi-start path; the
+        // ridge models keep it (the Phase 3 fix must not regress).
+        use crate::models::{
+            Exponential, Gamma, GenExtreme, GenPareto, Gumbel, LogNormal, Normal, NormalP1, Weibull,
+        };
+
+        // Analytic (closed-form MLE, unique optimum): fast single-start path.
+        assert!(!Normal.needs_multistart(), "norm should skip multi-start");
+        assert!(
+            !Exponential.needs_multistart(),
+            "expon should skip multi-start"
+        );
+        assert!(
+            !NormalP1::new(vec![0.0, 1.0], 0.0, 1.0).needs_multistart(),
+            "norm_p1 should skip multi-start"
+        );
+
+        // Ridge / spurious-stationary-point models: keep the robust path.
+        //
+        // `lnorm` is deliberately in this group: although it is an "analytic"
+        // model, its likelihood has a spurious large-`meanlog` stationary point
+        // that the caller's `init` BFGS can reach, so it needs the multi-start
+        // (see the note in `models/lnorm.rs`).
+        assert!(
+            LogNormal.needs_multistart(),
+            "lnorm must keep multi-start (spurious large-scale optimum)"
+        );
+        assert!(
+            GenExtreme.needs_multistart(),
+            "genextreme must keep multi-start"
+        );
+        assert!(
+            GenPareto.needs_multistart(),
+            "genpareto must keep multi-start"
+        );
+        assert!(Gumbel.needs_multistart(), "gumbel must keep multi-start");
+        assert!(Weibull.needs_multistart(), "weibull must keep multi-start");
+        assert!(Gamma.needs_multistart(), "gamma must keep multi-start");
+    }
+
+    #[test]
+    fn needs_multistart_default_is_true() {
+        // The trait default must preserve the Phase 3 behaviour: a model that
+        // does not override `needs_multistart` keeps the robust multi-start
+        // path. This is the guard against a missing override silently
+        // regressing the short-record fix.
+        assert!(GaussianNumerical.needs_multistart());
+        assert!(Gaussian.needs_multistart());
     }
 }

@@ -99,9 +99,12 @@ pub fn movexiawayfromzero(xi: f64) -> f64 {
 ///   values are returned unchanged.
 ///
 /// `minxi` is [`MIN_XI`] (`10^-7`), matching the reference. This is a direct
-/// transcription of the reference helper and is used by
-/// [`crate::api::predict_gev`] to clamp the CP quantiles to the support bound
-/// (Issue 4, Phase 4).
+/// transcription of the reference helper.
+///
+/// **Not applied to the CP quantiles.** The reference applies `fixgevrange` to
+/// the **data**, not to the CP quantiles, and [`crate::api::predict_gev`] now
+/// leaves the CP quantiles unclamped to match the reference (Issue 2 re-check,
+/// item A). The helper is retained for the data path / other callers.
 ///
 /// The input is returned as a new `Vec`; the caller's slice is not modified.
 pub fn fixgevrange(y: &[f64], v1: f64, v2: f64, v3: f64) -> Vec<f64> {
@@ -252,7 +255,8 @@ impl Derivatives for GenExtreme {
         ]
     }
 
-    /// Reject the GEV degenerate region (Phase 3, Issue 3).
+    /// Reject the GEV degenerate region (Phase 3, Issue 3; Issue 2 re-check,
+    /// item B1).
     ///
     /// The GEV log-likelihood has a **spurious** maximum as `scale -> 0` and
     /// `shape -> +inf` with `loc -> min(y)`: the density concentrates on the
@@ -266,12 +270,43 @@ impl Derivatives for GenExtreme {
     /// `shape ~ -1.32`), and the reference `gev_checkmle` bounds are "currently
     /// not used". The degeneracy is characterised by the vanishing scale, so the
     /// shape bound is set generously to catch only the runaway.
+    ///
+    /// This data-independent form is the fallback; the multi-start selection
+    /// path uses [`GenExtreme::valid_params_for`], which adds the **relative**
+    /// scale floor that actually rejects the `scale -> 0` spurious maximum.
     fn valid_params(&self, params: &[f64]) -> bool {
         params.len() == 3
             && params[1] > 0.0
             && params[1].is_finite()
             && params[2].is_finite()
             && params[2].abs() < 10.0
+    }
+
+    /// Reject the GEV degenerate region **relative to the data** (Issue 2
+    /// re-check, item B1).
+    ///
+    /// In addition to [`GenExtreme::valid_params`], this rejects a fit whose
+    /// scale is vanishingly small **relative to the data spread** or whose
+    /// location has run away, via
+    /// [`crate::models::gev_scale_and_location_ok`]:
+    ///
+    /// - `scale > GEV_SCALE_FLOOR_REL * spread(y)` (the vanishing-scale guard),
+    /// - `|loc| <= GEV_LOCATION_RUNAWAY_REL * spread(y)` (the runaway-location
+    ///   guard).
+    ///
+    /// The spurious `scale -> 0` maximum reaches relative scales of `~1e-5` and
+    /// below, while a legitimate GEV fit has a scale of the same order as the
+    /// data spread (`>= ~0.13` relative), so the relative floor cleanly
+    /// separates the two without rejecting legitimate small-scale fits.
+    ///
+    /// The shape bound is intentionally **not** tightened to the reference
+    /// `maxxi = 1`: the reference legitimately returns `|shape| >= 1` for short
+    /// records (e.g. `[-1, 0, 1]` gives `shape ~ -1.32`), so a `maxxi = 1` bound
+    /// would reject valid fits. The relative scale/location guard is the primary
+    /// guard (see the plan §7 open question 1 resolution).
+    fn valid_params_for(&self, params: &[f64], y: &[f64]) -> bool {
+        self.valid_params(params)
+            && crate::models::gev_scale_and_location_ok(params[0], params[1], y)
     }
 
     /// Analytic score (reference `gev_logfd`, summed over observations).
@@ -495,6 +530,85 @@ mod tests {
         assert!(m.revert2ml(-1.0));
         assert!(m.revert2ml(1.5));
         assert!(m.revert2ml(-2.0));
+    }
+
+    // --- Issue 2 re-check (item B1): degenerate-fit guard -------------------
+
+    #[test]
+    fn valid_params_for_rejects_vanishing_scale() {
+        // A ~10-point record with spread ~1. The relative scale floor is
+        // GEV_SCALE_FLOOR_REL (1e-3) * spread, so a scale of 1e-6 / 1e-4 is
+        // rejected while a legitimate small scale (0.05) is accepted.
+        let m = GenExtreme;
+        let y = [1.0, 1.2, 0.9, 1.5, 1.1, 1.3, 0.8, 1.4, 1.0, 1.6];
+        assert!(m.valid_params_for(&[1.2, 0.3, -0.1], &y), "normal fit");
+        assert!(
+            !m.valid_params_for(&[1.2, 1e-6, 0.1], &y),
+            "scale 1e-6 must be rejected (vanishing)"
+        );
+        assert!(
+            !m.valid_params_for(&[1.2, 1e-4, 0.1], &y),
+            "scale 1e-4 must be rejected (below the 1e-3 relative floor)"
+        );
+        assert!(
+            m.valid_params_for(&[1.2, 0.05, 0.1], &y),
+            "scale 0.05 is a legitimate small scale and must be accepted"
+        );
+    }
+
+    #[test]
+    fn valid_params_for_rejects_runaway_location() {
+        // The constant-record face of the degeneracy: the location runs off to
+        // ~1e6 while the spread is ~1. The runaway-location bound is 1e3 *
+        // spread, so 1e6 is rejected and a normal location is accepted.
+        let m = GenExtreme;
+        let y = [1.0, 1.2, 0.9, 1.5, 1.1, 1.3, 0.8, 1.4, 1.0, 1.6];
+        assert!(
+            !m.valid_params_for(&[1e6, 0.3, 0.1], &y),
+            "runaway location 1e6 must be rejected"
+        );
+        assert!(
+            m.valid_params_for(&[1.2, 0.3, 0.1], &y),
+            "normal location must be accepted"
+        );
+    }
+
+    #[test]
+    fn valid_params_for_keeps_legitimate_short_record_shapes() {
+        // Item B1 / plan §7 open question 1: the reference legitimately returns
+        // |shape| >= 1 for short records (e.g. [-1, 0, 1] gives shape ~ -1.32).
+        // The guard must NOT reject these (it does not tighten to maxxi = 1).
+        let m = GenExtreme;
+        let y = [-1.0, 0.0, 1.0];
+        assert!(
+            m.valid_params_for(&[0.0, 1.0, -1.32], &y),
+            "shape -1.32 on [-1, 0, 1] is a legitimate reference fit"
+        );
+        // The runaway shape bound (|shape| < 10) is still enforced.
+        assert!(
+            !m.valid_params_for(&[0.0, 1.0, 10.0], &y),
+            "|shape| >= 10 must still be rejected"
+        );
+    }
+
+    #[test]
+    fn degenerate_record_fits_to_a_valid_interior_point() {
+        // A tight cluster with one outlier is the canonical `scale -> 0`
+        // degenerate record. The multi-start must now reject the degenerate
+        // candidate and return a valid interior fit (not a vanishing scale).
+        let m = GenExtreme;
+        let y = [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.001];
+        let r = fit(&m, &y, &[1.0, 1.0, 0.1]);
+        assert!(
+            m.valid_params_for(&r.ml_params, &y),
+            "the winning fit must be valid (not degenerate): {:?}",
+            r.ml_params
+        );
+        assert!(
+            r.ml_params[1] > 1e-3,
+            "the winning scale must be above the relative floor: {}",
+            r.ml_params[1]
+        );
     }
 
     #[test]

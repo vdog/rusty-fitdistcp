@@ -137,6 +137,29 @@ pub struct FitResult {
     /// rather than produced directly by the expansion. It is `false` for models
     /// that do not apply the guard (e.g. the analytic closed-form models).
     pub cp_monotone_clamped: bool,
+    /// `true` when the fit is **degenerate** and the CP output is not
+    /// trustworthy (Issue 2 re-check, item B2).
+    ///
+    /// The GEV has a spurious `scale -> 0` maximum that the multi-start
+    /// optimizer can reach on short records. The relative scale floor
+    /// ([`crate::models::GenExtreme::valid_params_for`]) rejects such candidates,
+    /// but if **every** candidate is rejected the fit falls back to the
+    /// caller's-start optimizer result, which may still be degenerate. In that
+    /// case the CP quantiles are set to `NaN` (rather than returning huge finite
+    /// numbers such as `1e8`/`2e13`) and this flag is set so callers can detect
+    /// the invalid fit. It is `false` for a valid fit and for models that do not
+    /// have a degenerate region.
+    ///
+    /// # Policy (item B2)
+    ///
+    /// The chosen policy is **NaN + flag**: a degenerate fit returns `NaN` CP
+    /// quantiles (and `NaN` CP density) with `degenerate_fit = true`, matching
+    /// the reference's observable behaviour of not returning a huge finite
+    /// return level. The MLE parameters are still reported (they are the best
+    /// candidate found) so the caller can inspect them; `convergence` reflects
+    /// the optimizer status. This is documented in
+    /// [`tests/golden/TOLERANCE.md`](../../tests/golden/TOLERANCE.md).
+    pub degenerate_fit: bool,
 }
 
 impl FitResult {
@@ -307,6 +330,8 @@ where
         start: mle.start.clone(),
         // The analytic closed-form models do not apply the monotonicity guard.
         cp_monotone_clamped: false,
+        // The analytic closed-form models have no degenerate region.
+        degenerate_fit: false,
     }
 }
 
@@ -394,6 +419,8 @@ pub fn predict<M: crate::dmgs::DmgsModel + Copy + Sync>(
         start: mle.start.clone(),
         // The generic DMGS path does not apply the monotonicity guard.
         cp_monotone_clamped: false,
+        // The generic DMGS path does not detect a degenerate fit.
+        degenerate_fit: false,
     }
 }
 
@@ -415,6 +442,19 @@ pub fn predict<M: crate::dmgs::DmgsModel + Copy + Sync>(
 ///    negative-shape case where the direct density formula is not. The CP
 ///    quantiles still come from the DMGS expansion.
 ///
+/// # CP quantiles are intentionally **unclamped** (Issue 2 re-check, item A)
+///
+/// The reference `qgev_cp` computes `ml_max` (the finite upper endpoint for a
+/// negative shape) but **never clamps the CP quantiles to it**: `ml_max` is only
+/// used to report the bound and to build the quantile-derived density. The
+/// reference also applies `fixgevrange` to the **data**, not to the CP
+/// quantiles. An earlier Rust revision clamped the CP quantiles to
+/// `[ml_min, ml_max]` and to the `fixgevrange` support bound; that biased the
+/// upper tail low (e.g. the 1-in-1000 return level came out ~2.77 instead of the
+/// reference ~4.29). The clamp has been **removed** so the CP quantiles match
+/// the reference. The only post-processing retained is the monotonicity guard
+/// (see below), which is a deliberate Rust-only divergence.
+///
 /// The `small_n` flag is propagated from the MLE fit unchanged (§4.4): the
 /// reference flags small samples rather than silently degrading, and the flag
 /// flows through this CP path.
@@ -433,6 +473,7 @@ pub fn predict_gev(
 ) -> FitResult {
     use crate::dmgs::{DmgsIntegrator, DmgsModel};
     use crate::mle::fit;
+    use crate::models::Derivatives;
 
     let mle = fit(&model, &req.y, init);
     let integ = DmgsIntegrator::new(model);
@@ -451,49 +492,43 @@ pub fn predict_gev(
         .map(|&pi| DmgsModel::quantile(&model, pi, &mle.ml_params))
         .collect();
 
-    let loc = mle.ml_params[0];
-    let scale = mle.ml_params[1];
     let shape = mle.ml_params[2];
     let revert2ml = model.revert2ml(shape);
 
+    // Issue 2 re-check (item B2): detect a degenerate fit. The multi-start
+    // selection path rejects candidates that fail the relative scale floor
+    // (`valid_params_for`), but if **every** candidate is rejected the fit falls
+    // back to the caller's-start optimizer result, which may still be
+    // degenerate. A degenerate fit is one whose parameters fail the data-aware
+    // validity predicate (e.g. a vanishing scale relative to the data spread).
+    // In that case the CP output is not trustworthy: we return `NaN` CP
+    // quantiles/density (rather than huge finite numbers such as 1e8/2e13) and
+    // set `degenerate_fit = true` so callers can detect the invalid fit.
+    let degenerate_fit = !model.valid_params_for(&mle.ml_params, &req.y);
+
     // Tracks whether the CP-quantile monotonicity guard fired (Phase A, Issue 4).
     let mut cp_monotone_clamped = false;
-    let (cp_pdf, cp_quantiles) = if revert2ml {
+    let (cp_pdf, cp_quantiles) = if degenerate_fit {
+        // Item B2 policy: a degenerate fit returns NaN CP output (not a huge
+        // finite return level). The MLE parameters are still reported below.
+        (vec![f64::NAN; req.x.len()], vec![f64::NAN; req.p.len()])
+    } else if revert2ml {
         // Reference: when |shape| >= 1 the CP output reverts to the MLE output.
         (ml_pdf.clone(), ml_quantiles.clone())
     } else {
         // CP quantiles from the DMGS expansion; CP density from the CP quantile
         // function (the reference `rh_flat_pdf`), evaluated at alpha = 1 - p.
+        //
+        // Issue 2 re-check (item A): the CP quantiles are **intentionally left
+        // unclamped**. The reference `qgev_cp` does not clamp `rh_flat_quantiles`
+        // to `ml_max`/`ml_min` and does not apply `fixgevrange` to them (it
+        // applies `fixgevrange` to the data only). Clamping here biased the
+        // upper tail low (1-in-1000: reference ~4.287 vs clamped ~2.769). Do not
+        // reintroduce a support clamp on this path; the monotonicity guard below
+        // is the only post-processing.
         let cp_q = integ.cp_quantiles(&mle.ml_params, &req.y, &req.p);
         let alpha: Vec<f64> = req.p.iter().map(|&pi| 1.0 - pi).collect();
         let cp_d = integ.cp_pdf_quantile_derived(&mle.ml_params, &req.y, &alpha, fdalpha);
-
-        // Issue 4 (Phase 4): clamp the CP quantiles to the GEV support. At small
-        // n the DMGS expansion can push a CP quantile outside the support (e.g. a
-        // negative 1-in-100 return level for a positive-support fit). The
-        // reference `fixgevrange` clamps to the (nudged) support bound:
-        //   * negative shape: upper bound `loc - scale/(shape - minxi)`;
-        //   * positive shape: lower bound `loc - scale/(shape + minxi)`.
-        let cp_q = crate::models::genextreme::fixgevrange(&cp_q, loc, scale, shape);
-
-        // Extend the `revert2ml` guard: if any CP quantile still leaves the
-        // support (non-finite, or beyond the finite bound), fall back to the MLE
-        // quantile for that point. `fixgevrange` already clamps finite values, so
-        // this catches the non-finite case (e.g. a NaN from a singular expansion)
-        // and any residual out-of-support value.
-        let ml_max = model.ml_max(loc, scale, shape);
-        let ml_min = model.ml_min(loc, scale, shape);
-        let cp_q: Vec<f64> = cp_q
-            .iter()
-            .zip(ml_quantiles.iter())
-            .map(|(&q, &mq)| {
-                if q.is_finite() && q <= ml_max && q >= ml_min {
-                    q
-                } else {
-                    mq
-                }
-            })
-            .collect();
 
         // Phase A (Issue 4): enforce monotone CP quantiles (non-decreasing in
         // `p`). The DMGS expansion can produce a non-monotone curve at small n
@@ -543,6 +578,7 @@ pub fn predict_gev(
         small_n: mle.small_n,
         start: mle.start.clone(),
         cp_monotone_clamped,
+        degenerate_fit,
     }
 }
 
@@ -660,6 +696,9 @@ pub fn predict_gpd(
         small_n: mle.small_n,
         start: mle.start.clone(),
         cp_monotone_clamped,
+        // The GPD CP path does not detect a degenerate fit (item C handles the
+        // GPD near-−1 regime separately).
+        degenerate_fit: false,
     }
 }
 
@@ -742,6 +781,8 @@ pub fn predict_gamma(req: &PredictionRequest, init: &[f64]) -> FitResult {
         start: mle.start.clone(),
         // The gamma CP path does not apply the monotonicity guard.
         cp_monotone_clamped: false,
+        // The gamma CP path does not detect a degenerate fit.
+        degenerate_fit: false,
     }
 }
 
@@ -1013,6 +1054,8 @@ pub fn predict_gev_p1(
         start: mle.start.clone(),
         // The genextreme_p12 CP path does not apply the monotonicity guard.
         cp_monotone_clamped: false,
+        // The genextreme_p12 CP path does not detect a degenerate fit.
+        degenerate_fit: false,
     }
 }
 
@@ -1098,6 +1141,8 @@ pub fn predict_gev_p12(
         start: mle.start.clone(),
         // The genextreme_p1 CP path does not apply the monotonicity guard.
         cp_monotone_clamped: false,
+        // The genextreme_p1 CP path does not detect a degenerate fit.
+        degenerate_fit: false,
     }
 }
 
@@ -1239,6 +1284,7 @@ mod tests {
             small_n: false,
             start: vec![0.0, 1.0],
             cp_monotone_clamped: false,
+            degenerate_fit: false,
         };
         assert!(result.is_converged());
         assert_eq!(result.ml_params.len(), 2);

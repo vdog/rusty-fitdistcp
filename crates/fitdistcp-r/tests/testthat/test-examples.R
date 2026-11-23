@@ -126,13 +126,11 @@ test_that("R Example 2: qgev_cp returns ml/cp quantiles and GEV fields", {
   expect_true(all(is.finite(q$cp_quantiles)))
 
   # The MLE quantiles are strictly monotone increasing in p. The CP quantiles
-  # are non-strictly increasing because Phase 4 (Issue 4) clamps them to the GEV
-  # support bound `ml_max`, so the top tail can saturate at the bound (equal
-  # consecutive values).
+  # are non-strictly increasing (the monotonicity guard is retained). They are
+  # NOT clamped to the GEV support bound `ml_max` (Issue 2 re-check, item A):
+  # the reference does not clamp the CP tail, so it may exceed `ml_max`.
   expect_true(all(diff(q$ml_quantiles) > 0))
   expect_true(all(diff(q$cp_quantiles) >= 0))
-  # Every CP quantile is within the support.
-  expect_true(all(q$cp_quantiles <= q$ml_max + 1e-9))
 
   # The CP quantiles have fatter tails than the MLE quantiles: the lower tail
   # is lower and the upper tail is higher.

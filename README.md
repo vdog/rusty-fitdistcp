@@ -72,6 +72,11 @@ fitdistcp/
 │   ├── mle_golden.json
 │   ├── cp_golden.json
 │   ├── gev_negshape_golden.json
+│   ├── gev_smalln_golden.json
+│   ├── gev_tail_golden.json
+│   ├── gev_degenerate_golden.json
+│   ├── gpd_dollar_golden.json
+│   ├── gpd_smalln_negshape_golden.json
 │   ├── w11_cp_golden.json
 │   ├── TOLERANCE.md
 │   └── README.md
@@ -79,6 +84,11 @@ fitdistcp/
 │   ├── generate_golden.R
 │   ├── generate_cp_golden.R
 │   ├── generate_gev_negshape_golden.R
+│   ├── generate_gev_smalln_golden.R
+│   ├── generate_gev_tail_golden.R
+│   ├── generate_gev_degenerate_golden.R
+│   ├── generate_gpd_dollar_golden.R
+│   ├── generate_gpd_smalln_negshape_golden.R
 │   ├── generate_w11_cp_golden.R
 │   └── vendor-r-crate.sh
 └── .github/workflows/               # ci.yml + release.yml
@@ -300,6 +310,11 @@ docker compose run --rm dev Rscript tools/generate_golden.R
 docker compose run --rm dev Rscript tools/generate_cp_golden.R
 docker compose run --rm dev Rscript tools/generate_gev_negshape_golden.R
 docker compose run --rm dev Rscript tools/generate_w11_cp_golden.R
+docker compose run --rm dev Rscript tools/generate_gpd_dollar_golden.R
+docker compose run --rm dev Rscript tools/generate_gev_smalln_golden.R
+docker compose run --rm dev Rscript tools/generate_gev_tail_golden.R
+docker compose run --rm dev Rscript tools/generate_gev_degenerate_golden.R
+docker compose run --rm dev Rscript tools/generate_gpd_smalln_negshape_golden.R
 
 # 4. Confirm the suite still passes at the documented tolerances.
 docker compose run --rm dev cargo test --workspace
@@ -359,6 +374,29 @@ bugs:
 - **Small-n handling.** DMGS degrades below `n ≈ 10`; the port flags small-n
   results rather than silently degrading, and the golden tolerance is relaxed
   for `n < 10` (see `TOLERANCE.md`).
+- **GEV CP quantiles are not clamped (Issue 2 re-check, item A).** The reference
+  `qgev_cp` never caps its CP quantiles at the ML upper endpoint `ml_max`; the
+  port now matches it. (An earlier Phase 4 clamp biased the 1-in-1000 return
+  level low.) The monotonicity guard is retained — see below.
+- **Degenerate GEV fits return `NaN` + a `degenerate_fit` flag (item B).** On
+  ~10-point records the GEV likelihood has a spurious `scale -> 0` maximum. The
+  reference returns huge finite CP quantiles there (up to `~2e11`); the port
+  rejects the degenerate candidate and, if no valid candidate exists, returns
+  `NaN` CP output with `degenerate_fit = true` (surfaced in both bindings). This
+  is a deliberate, documented Rust-only divergence — strictly safer than the
+  reference.
+- **GPD near-−1 shapes revert to the ML curve (item C).** When the fitted GPD
+  shape is `<= -0.98`, the DMGS `1/fhat` term blows up, so the port reverts the
+  CP output to the ML output (the reference's `revert2ml` only fires at
+  `|shape| >= 1`). This only affects the Rust multi-start, which can land just
+  above −1 where the reference `optim` does not.
+- **`_p1` / `_p12` models require exactly one of `t0` / `n0` (item E).** Both
+  bindings now raise the reference error (`"Either t0 or n0 must be specified"` /
+  `"Only one of t0 or n0 must be specified"`) instead of silently defaulting
+  `t0 = 0`.
+- **Monotonicity guard (Rust-only).** CP quantiles from `predict_gev` /
+  `predict_gpd` are forced non-decreasing; the `cp_monotone_clamped` flag reports
+  whether the guard fired (see `TOLERANCE.md` §7).
 
 The Python binding is a **drop-in replacement** for the reference `fitdistcp`
 v0.0.4 Python package (submodule API), with the flat API retained as deprecated

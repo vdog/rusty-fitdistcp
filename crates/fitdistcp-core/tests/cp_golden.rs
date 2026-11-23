@@ -24,6 +24,17 @@
 //!   `powf`-heavy density derivatives carry more round-off). `DMGS_RTOL = 1e-5`
 //!   is a 100× tightening of the pre-W9 `1e-3` and still comfortably covers the
 //!   weibull round-off while catching any genuine formula/sign bug.
+//!
+//! # Weibull prior slope (item D1)
+//!
+//! The reference `qweibull_cp` uses `lambdad_rhp = c(-1/shape, -1/scale)` (the
+//! right-Haar prior `π(k, σ) ∝ 1/(k σ)`), **not** the scale-only default
+//! `c(0, -1/scale)`. Before item D1 the Rust `Weibull` `DmgsModel` used the
+//! default, which dropped the `-1/shape` term and produced a ~3% (up to ~13% at
+//! `p = 0.1`) CP residual at `n = 10`. The `weibull_n10` case below pins the
+//! corrected prior: the Rust DMGS now matches the reference to machine
+//! precision (the remaining difference is only the `O(1/n)` truncation, which
+//! the reference also exhibits).
 //! - **Analytic-CP cross-check** (`norm`, `expon`, `lnorm`): the reference also
 //!   exposes the **exact** analytic CP. The DMGS expansion is a first-order
 //!   approximation of that exact integral, so the two differ by the `O(1/n)`
@@ -691,4 +702,90 @@ fn golden_cp_dmgs_models() {
             "gamma.cp_quantiles fixture unexpectedly non-null"
         );
     }
+}
+
+/// Item D1: the `n = 10` Weibull CP case.
+///
+/// Before item D1 the Rust `Weibull` `DmgsModel` used the scale-only default
+/// prior slope `[0, -1/scale]`, whereas the reference `qweibull_cp` uses
+/// `lambdad_rhp = c(-1/shape, -1/scale)`. The missing `-1/shape` term produced a
+/// ~3% (up to ~13% at `p = 0.1`) CP residual at `n = 10`. With the corrected
+/// prior the Rust DMGS matches the reference to machine precision, so this test
+/// uses the tight `DMGS_RTOL` (not a loosened small-`n` tolerance).
+///
+/// The test also pins the prior slope itself, so a regression that reverts the
+/// `Weibull::log_prior_slope` override is caught even if the fixture is
+/// regenerated with the wrong prior.
+#[test]
+fn golden_weibull_n10_prior_slope() {
+    use fitdistcp_core::dmgs::DmgsIntegrator;
+
+    let root = load_fixture();
+    let models = root.get("models");
+    let datasets = root.get("datasets");
+    let x_grid = root.get("x_grid").as_f64_vec();
+    let p_grid = root.get("p_grid").as_f64_vec();
+
+    let y = datasets.get("y_weibull_n10").as_f64_vec();
+    assert_eq!(y.len(), 10, "weibull_n10 fixture must be n = 10");
+    let m = models.get("weibull_n10");
+    let ref_params = m.get("params").as_f64_vec(); // [shape, scale]
+
+    let r = fit(&Weibull, &y, &[1.0, 1.0]);
+    assert_close(
+        r.ml_params[0],
+        ref_params[0],
+        1e-4,
+        1e-6,
+        "weibull_n10.shape",
+    );
+    assert_close(
+        r.ml_params[1],
+        ref_params[1],
+        1e-4,
+        1e-6,
+        "weibull_n10.scale",
+    );
+
+    // The prior slope must be the reference `c(-1/shape, -1/scale)`, not the
+    // scale-only default `c(0, -1/scale)`.
+    let integ = DmgsIntegrator::new(Weibull);
+    let slope = integ.log_prior_slope(&r.ml_params);
+    assert_close(
+        slope[0],
+        -1.0 / r.ml_params[0],
+        1e-12,
+        1e-12,
+        "weibull_n10.slope[0]",
+    );
+    assert_close(
+        slope[1],
+        -1.0 / r.ml_params[1],
+        1e-12,
+        1e-12,
+        "weibull_n10.slope[1]",
+    );
+    assert!(
+        slope[0].abs() > 0.0,
+        "weibull prior slope[0] must be non-zero (-1/shape), got {}",
+        slope[0]
+    );
+
+    // CP quantiles and pdf match the reference at the tight DMGS tolerance.
+    let cp_q = dmgs_cp_quantiles(Weibull, &r.ml_params, &y, &p_grid);
+    compare_vec(
+        &cp_q,
+        &m.get("cp_quantiles").as_f64_vec(),
+        DMGS_RTOL,
+        DMGS_ATOL,
+        "weibull_n10.cp_q",
+    );
+    let cp_pdf = dmgs_cp_pdf(Weibull, &r.ml_params, &y, &x_grid);
+    compare_vec(
+        &cp_pdf,
+        &m.get("cp_pdf").as_f64_vec(),
+        DMGS_RTOL,
+        DMGS_ATOL,
+        "weibull_n10.cp_pdf",
+    );
 }

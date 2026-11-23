@@ -76,6 +76,16 @@ impl Derivatives for LogNormal {
         2
     }
 
+    // NOTE (Issue 2 re-check, item F1): the log-normal is **not** opted out of
+    // the multi-start path, even though it is an "analytic" model. Unlike the
+    // normal, its likelihood has a *spurious* stationary point at a large
+    // `meanlog`/`sdlog` (the same class of point the Phase 3 fix targets for
+    // Weibull/Gumbel). From the caller's `init` the hand-rolled BFGS can
+    // converge to that point (e.g. `meanlog ~ 2.8e5` on the `fits_synthetic_data`
+    // record), and it is the Newton-from-start run inside the multi-start path
+    // that reaches the true optimum. So `lnorm` keeps the default
+    // `needs_multistart() == true`.
+
     fn score(&self, params: &[f64], y: &[f64]) -> Vec<f64> {
         let meanlog = params[0];
         let sdlog = params[1];

@@ -115,13 +115,12 @@ def test_python_example_2_gev_ppf():
     assert np.all(np.isfinite(res["cp_quantiles"]))
 
     # Quantiles are monotone increasing in p. The MLE quantiles are strictly
-    # increasing; the CP quantiles are non-strictly increasing because Phase 4
-    # (Issue 4) clamps them to the GEV support bound `ml_max`, so the top tail
-    # can saturate at the bound (equal consecutive values).
+    # increasing; the CP quantiles are non-strictly increasing (the monotonicity
+    # guard is retained). They are NOT clamped to the GEV support bound `ml_max`
+    # (Issue 2 re-check, item A): the reference does not clamp the CP tail, so it
+    # may exceed `ml_max`.
     assert np.all(np.diff(res["ml_quantiles"]) > 0)
     assert np.all(np.diff(res["cp_quantiles"]) >= 0)
-    # Every CP quantile is within the support.
-    assert np.all(res["cp_quantiles"] <= res["ml_max"] + 1e-9)
 
     # The CP quantiles have fatter tails than the MLE quantiles.
     assert res["cp_quantiles"][0] < res["ml_quantiles"][0]

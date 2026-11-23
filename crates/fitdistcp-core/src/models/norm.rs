@@ -151,6 +151,13 @@ impl Derivatives for Normal {
         2
     }
 
+    /// The normal has a closed-form, well-conditioned likelihood with a unique
+    /// optimum, so the robust multi-start + Nelder–Mead polish is wasted work
+    /// (Issue 2 re-check, item F1). A single BFGS run reaches the MLE.
+    fn needs_multistart(&self) -> bool {
+        false
+    }
+
     fn score(&self, params: &[f64], y: &[f64]) -> Vec<f64> {
         let mu = params[0];
         let sigma = params[1];

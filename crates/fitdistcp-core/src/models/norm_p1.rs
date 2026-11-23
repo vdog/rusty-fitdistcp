@@ -218,6 +218,14 @@ impl Derivatives for NormalP1 {
         3
     }
 
+    /// The normal `_p1` regression is a linear model with a closed-form,
+    /// well-conditioned likelihood (the least-squares solution), so the
+    /// multi-start + Nelder–Mead polish is wasted work (Issue 2 re-check,
+    /// item F1).
+    fn needs_multistart(&self) -> bool {
+        false
+    }
+
     fn score(&self, params: &[f64], y: &[f64]) -> Vec<f64> {
         let beta0 = params[0];
         let beta1 = params[1];

@@ -128,6 +128,129 @@ pub(crate) fn sample_std_ddof1(x: &[f64]) -> f64 {
     (ss / (nf - 1.0)).sqrt()
 }
 
+/// Relative scale floor for the GEV degenerate-fit guard (Issue 2 re-check,
+/// item B1).
+///
+/// The GEV (and its `_p1`/`_p12` variants) has a **spurious** log-likelihood
+/// maximum as `scale -> 0` with `shape -> +inf` and `loc -> min(y)`: the density
+/// concentrates on the sample minimum and the log-likelihood grows without
+/// bound. The reference `optim` does not find this point, but the Rust
+/// multi-start BFGS/Nelder-Mead can, producing huge finite CP quantiles (up to
+/// `2e13` in the hail-region corpus) instead of a meaningful fit.
+///
+/// The guard is **relative**, not absolute: a scale is rejected only when it is
+/// smaller than `GEV_SCALE_FLOOR_REL` times the data spread. This keeps
+/// legitimate small-scale fits (e.g. a tightly clustered record) while rejecting
+/// the vanishing-scale degeneracy. The spread is
+/// `max(sd(y), |mean(y)|, 1)` so the floor is well-defined for a constant or
+/// near-zero record (where `sd(y) == 0`).
+///
+/// # Threshold calibration (item B1)
+///
+/// The threshold was calibrated against the synthetic hail-region corpus
+/// ([`crates/fitdistcp-core/tests/hail_region_divergence.rs`]) and the canonical
+/// degenerate records:
+///
+/// - **Legitimate fits** have `scale / spread >= 0.126` (the smallest observed
+///   over the corpus and the golden fixtures; a real GEV scale is of the same
+///   order as the data spread).
+/// - **Degenerate fits** reach `scale / spread` down to `~1e-5` (e.g. a tight
+///   cluster with one outlier gives `~1e-4`; a near-constant record gives
+///   `~1.6e-5`).
+///
+/// `1e-3` sits an order of magnitude below the smallest legitimate relative
+/// scale and an order of magnitude above the largest degenerate one, so it
+/// cleanly separates the two regimes. (An earlier `1e-6` floor was too loose: it
+/// did not reject the `~1e-4` tight-cluster degeneracy.)
+pub(crate) const GEV_SCALE_FLOOR_REL: f64 = 1e-3;
+
+/// Runaway-location bound for the GEV degenerate-fit guard (Issue 2 re-check,
+/// item B1).
+///
+/// The `scale -> 0` spurious maximum has a second face: on a **constant** record
+/// the optimizer can run the location off to `±inf` (e.g. `loc ~ -4.3e6`,
+/// `scale ~ 1.2e7` for a constant record), which is the same degeneracy viewed
+/// through the location. A legitimate GEV location is of the same order as the
+/// data (`|loc| / spread <= ~1`); we reject `|loc| / spread > 1e3`, which is far
+/// above any legitimate fit yet catches the runaway.
+pub(crate) const GEV_LOCATION_RUNAWAY_REL: f64 = 1e3;
+
+/// The data spread `max(sd(y), |mean(y)|, 1)` used by the GEV degenerate-fit
+/// guard.
+///
+/// The `max(.., 1)` keeps the spread positive for a constant or near-zero
+/// record (where `sd(y) == 0`), so the relative thresholds are well-defined.
+pub(crate) fn gev_data_spread(y: &[f64]) -> f64 {
+    let sd = sample_std_ddof1(y);
+    let mean_abs = sample_mean(y).abs();
+    sd.max(mean_abs).max(1.0)
+}
+
+/// Near-−1 shape margin for the DMGS `revert2ml` guard (Issue 2 re-check,
+/// item C1).
+///
+/// The DMGS CP expansion divides by `n · fhat`, where `fhat` is the MLE density
+/// at the CP quantile. For a GPD shape approaching −1 from above the density is
+/// nearly non-integrable and `fhat` collapses, so the CP correction blows up:
+/// the CP quantiles leave the support `y < -scale/shape` and the monotone guard
+/// flattens the curve far above the data (the reported `n = 20` case: `19.8` vs
+/// the reference `2.06`). The reference `qgpd_k1_cp` reverts only at
+/// `|shape| >= 1`, but its `optim` never lands in the narrow `(-1, -0.98)` band;
+/// the Rust multi-start does, so the guard must be widened to cover it.
+///
+/// The revert fires when `shape <= -1 + GPD_NEAR_MINUS_ONE_DELTA`, i.e.
+/// `shape <= -0.98`.
+///
+/// # Threshold calibration (item C1)
+///
+/// Calibrated against the reference `qgpd_k1_cp` on `n = 20` records:
+///
+/// - **Blow-up onset.** Holding the scale at a fitted `n = 20` value and sweeping
+///   the shape, the raw DMGS CP quantile first exceeds the support bound
+///   `-scale/shape` at `shape ≈ -0.9835` (CP/ML ratio `1.81`) and goes `NaN` at
+///   `shape ≈ -0.988`. The blow-up band is therefore `(-0.988, -0.9835)`.
+/// - **Legitimate fits.** Over 3000 `n = 20` bounded datasets the reference MLE
+///   shape is **never** in `(-0.99, -0.95)`: it either lands `<= -1` (reverts,
+///   2718/3000) or well above `-0.95` (only 4 in `(-0.95, -0.90)`; the closest
+///   to −1 from above is `-0.027`). A `-0.98` threshold therefore has large
+///   headroom and does not over-trigger on legitimate fits.
+///
+/// `delta = 0.02` (`shape <= -0.98`) sits just above the blow-up onset
+/// (`-0.9835`) and far below the nearest legitimate reference shape (`-0.95`).
+pub(crate) const GPD_NEAR_MINUS_ONE_DELTA: f64 = 0.02;
+
+/// Whether a shape is in the near-−1 DMGS blow-up band (Issue 2 re-check,
+/// item C1).
+///
+/// Returns `true` when `shape <= -1 + GPD_NEAR_MINUS_ONE_DELTA` (i.e.
+/// `shape <= -0.98`). Shared by the GPD `revert2ml` guard; the GEV analogue
+/// (the 9 non-finite hail regions, shapes in `[-0.998, -0.967]`) is a
+/// documented follow-up and is **not** wired in here yet.
+pub(crate) fn near_minus_one_shape(shape: f64) -> bool {
+    shape <= -1.0 + GPD_NEAR_MINUS_ONE_DELTA
+}
+
+/// Whether a GEV `(loc, scale)` pair is in the degenerate region **relative to
+/// the data** (Issue 2 re-check, item B1).
+///
+/// Returns `true` when the fit is **valid** (not degenerate):
+///
+/// - `scale > GEV_SCALE_FLOOR_REL * spread(y)` (the vanishing-scale guard), and
+/// - `|loc| <= GEV_LOCATION_RUNAWAY_REL * spread(y)` (the runaway-location
+///   guard).
+///
+/// See [`GEV_SCALE_FLOOR_REL`] and [`GEV_LOCATION_RUNAWAY_REL`] for the
+/// calibration. This is the shared predicate used by
+/// [`crate::models::GenExtreme::valid_params_for`] and the `_p1`/`_p12`
+/// variants.
+pub(crate) fn gev_scale_and_location_ok(loc: f64, scale: f64, y: &[f64]) -> bool {
+    let spread = gev_data_spread(y);
+    scale.is_finite()
+        && scale > GEV_SCALE_FLOOR_REL * spread
+        && loc.is_finite()
+        && loc.abs() <= GEV_LOCATION_RUNAWAY_REL * spread
+}
+
 // --- Phase 1 distribution models (§3) -------------------------------------
 //
 // Ten models, split by integration path:
@@ -228,6 +351,40 @@ pub trait Derivatives {
         init.to_vec()
     }
 
+    /// Whether the MLE fit needs the **multi-start + Nelder–Mead polish**
+    /// strategy (Issue 2 re-check, item F1).
+    ///
+    /// The Phase 3 (Issue 3) robust optimiser in
+    /// [`crate::mle::fit_with_config`] evaluates several starts and, per start,
+    /// runs BFGS + two Newton–Raphson refinements + a gradient-free Nelder–Mead
+    /// polish. That is essential for the models with a **scale/shape ridge** and
+    /// spurious stationary points (GEV, GPD, Gumbel, Weibull, Gamma, and the
+    /// `_p1`/`_p12` variants), where the hand-rolled BFGS can otherwise stop at a
+    /// worse fit than the reference `optim`/`scipy` multi-start.
+    ///
+    /// It is **wasted work** for models with a well-conditioned, closed-form
+    /// likelihood (Normal, Log-normal, Exponential, and the Normal `_p1`
+    /// regression): a single BFGS run reaches the unique optimum, so the extra
+    /// starts, the second Newton run, and the Nelder–Mead polish only add cost.
+    /// On analytic `norm` at `n = 100` the unconditional pipeline was ~8× slower
+    /// than the single-start path (the item-F regression).
+    ///
+    /// # Default: `true` (preserve the Phase 3 behaviour)
+    ///
+    /// The default is `true` so that **every existing and future model keeps the
+    /// robust multi-start path unless it explicitly opts out**. This is the safe
+    /// direction for a public-API addition: a model that forgets to override it
+    /// stays correct (just slower), and the Phase 3 short-record fix cannot be
+    /// regressed by omission. Only the closed-form models override it to `false`.
+    ///
+    /// When `false`, [`crate::mle::fit_with_config`] runs a single BFGS from the
+    /// caller's `init` with one Newton–Raphson fallback (the pre-Phase-3 path)
+    /// and skips the `setics` start, the second Newton run, and the Nelder–Mead
+    /// polish.
+    fn needs_multistart(&self) -> bool {
+        true
+    }
+
     /// Whether `params` is in the model's **valid** parameter region (Phase 3,
     /// Issue 3).
     ///
@@ -239,10 +396,32 @@ pub trait Derivatives {
     /// `gev_checkmle(minxi = -1, maxxi = 1)`); the Rust multi-start uses this
     /// predicate to reject such candidates so a degenerate point cannot win.
     ///
+    /// This data-independent form is retained for callers that only have the
+    /// parameters. The multi-start selection path uses
+    /// [`Derivatives::valid_params_for`], which also receives the data so a
+    /// **relative** guard (e.g. the GEV scale floor, item B1) can be applied.
+    ///
     /// The default returns `true` (no constraint). Models with a degenerate
     /// region override this.
     fn valid_params(&self, _params: &[f64]) -> bool {
         true
+    }
+
+    /// Whether `params` is valid **for the dataset `y`** (Issue 2 re-check,
+    /// item B1).
+    ///
+    /// This is the data-aware counterpart of [`Derivatives::valid_params`] and
+    /// is the predicate the multi-start selection path
+    /// ([`crate::mle::fit_with_config`]) applies to every candidate. The default
+    /// delegates to [`Derivatives::valid_params`], so models that only need a
+    /// data-independent guard are unaffected.
+    ///
+    /// Models whose degeneracy is characterised by a parameter vanishing
+    /// **relative to the data scale** (the GEV `scale -> 0` spurious maximum)
+    /// override this to add a relative floor; see
+    /// [`crate::models::gev_scale_floor`].
+    fn valid_params_for(&self, params: &[f64], _y: &[f64]) -> bool {
+        self.valid_params(params)
     }
 
     /// Log-likelihood first derivatives (score) w.r.t. each parameter.

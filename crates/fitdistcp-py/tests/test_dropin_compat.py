@@ -290,8 +290,9 @@ def test_scalar_p_accepted_all_models(model):
 
 def test_scalar_p_accepted_genextreme_p1():
     """The predictor model accepts a scalar ``p``."""
+    # E1: a prediction point (`t0` or `n0`) is required (reference `maket0`).
     res = rusty_fitdistcp.genextreme_p1.ppf(
-        [1.0, 2.0, 3.0], t=[0.0, 1.0, 2.0], p=0.5
+        [1.0, 2.0, 3.0], t=[0.0, 1.0, 2.0], t0=2.0, p=0.5
     )
     assert np.asarray(res["ml_quantiles"]).shape == (1,)
 
