@@ -221,8 +221,18 @@ impl GenExtreme {
     /// support), so the CP output is set equal to the MLE output. This is the
     /// reference's guard for the **negative-shape** case (and the symmetric
     /// positive-shape case).
+    ///
+    /// **Issue #4:** the guard also reverts for a shape **approaching −1 from
+    /// above** (`shape <= -0.96`, via [`crate::models::gev_near_minus_one_shape`]).
+    /// The reference's `optim` never lands in the narrow `(-1, -0.90)` band (on
+    /// the 9 affected hail regions it lands `<= -1` on 8 and at `+0.03` on the
+    /// ninth), but the Rust multi-start does; at such a shape the DMGS `1/fhat`
+    /// term blows up, the CP quantiles leave the support `loc - scale/shape`, and
+    /// the curve goes `NaN`. Reverting to the MLE output reproduces the
+    /// reference's behaviour. This is the GEV analogue of the GPD item-C1 fix;
+    /// see [`crate::models::GEV_NEAR_MINUS_ONE_DELTA`] for the calibration.
     pub fn revert2ml(&self, shape: f64) -> bool {
-        shape.abs() >= 1.0
+        shape.abs() >= 1.0 || crate::models::gev_near_minus_one_shape(shape)
     }
 }
 
@@ -521,15 +531,43 @@ mod tests {
 
     #[test]
     fn revert2ml_matches_reference_threshold() {
-        // Reference `qgev_cp`: revert2ml = abs(v3hat) >= 1.
+        // Reference `qgev_cp`: revert2ml = abs(v3hat) >= 1. The Rust guard is
+        // the reference threshold **plus** the near-−1 widening (Issue #4), so
+        // `-0.99` now reverts (it is inside the near-−1 band); see
+        // `revert2ml_fires_near_minus_one` for the band boundaries.
         let m = GenExtreme;
         assert!(!m.revert2ml(0.0));
         assert!(!m.revert2ml(0.5));
-        assert!(!m.revert2ml(-0.99));
+        assert!(m.revert2ml(-0.99));
         assert!(m.revert2ml(1.0));
         assert!(m.revert2ml(-1.0));
         assert!(m.revert2ml(1.5));
         assert!(m.revert2ml(-2.0));
+    }
+
+    #[test]
+    fn revert2ml_fires_near_minus_one() {
+        // Issue #4: the near-−1 DMGS blow-up band must revert. The threshold is
+        // `shape <= -1 + GEV_NEAR_MINUS_ONE_DELTA` = `-0.96`.
+        let m = GenExtreme;
+        // Inside the blow-up band (the 9 hail-region fitted shapes span
+        // [-0.998, -0.967]).
+        assert!(m.revert2ml(-0.998));
+        assert!(m.revert2ml(-0.99));
+        assert!(m.revert2ml(-0.9767));
+        assert!(m.revert2ml(-0.9669));
+        // Exactly at the threshold reverts (`<=`).
+        assert!(m.revert2ml(-0.96));
+        // Just above the threshold does NOT revert (legitimate fits; the
+        // nearest legitimate reference shape is -0.9140).
+        assert!(!m.revert2ml(-0.959));
+        assert!(!m.revert2ml(-0.95));
+        assert!(!m.revert2ml(-0.914));
+        assert!(!m.revert2ml(-0.5));
+        // The GEV helper agrees with the guard, and the GPD helper is unchanged.
+        assert!(crate::models::gev_near_minus_one_shape(-0.99));
+        assert!(!crate::models::gev_near_minus_one_shape(-0.95));
+        assert!(!crate::models::near_minus_one_shape(-0.97));
     }
 
     // --- Issue 2 re-check (item B1): degenerate-fit guard -------------------

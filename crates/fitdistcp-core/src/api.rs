@@ -1347,6 +1347,10 @@ mod tests {
         use crate::models::GenExtreme;
         assert!(GenExtreme.revert2ml(-1.2));
         assert!(!GenExtreme.revert2ml(-0.3));
+        // Issue #4: the near-−1 band also reverts (`shape <= -0.96`).
+        assert!(GenExtreme.revert2ml(-0.99));
+        assert!(GenExtreme.revert2ml(-0.97));
+        assert!(!GenExtreme.revert2ml(-0.95));
         let y = vec![1.02, 1.55, 1.31, 1.88, 1.12, 1.67, 1.44, 1.21, 1.95, 1.38];
         let r = predict_gev(GenExtreme, &gev_request(y), &[1.4, 0.3, -0.1], 0.01);
         // In the non-revert regime the CP density is the quantile-derived one and

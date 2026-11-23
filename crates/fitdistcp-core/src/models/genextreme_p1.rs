@@ -159,13 +159,17 @@ impl GenExtremeP1 {
         (-t.powf(-1.0 / shape)).exp()
     }
 
-    /// The reference `qgev_p1_cp` `revert2ml` guard: `|shape| >= 1`.
+    /// The reference `qgev_p1_cp` `revert2ml` guard: `|shape| >= 1`, widened
+    /// with the near-−1 band (Issue #4).
     ///
     /// When the fitted shape magnitude reaches 1 the DMGS expansion is
     /// numerically unreliable, so the reference reverts the CP output to the MLE
-    /// output. Identical to [`crate::models::GenExtreme::revert2ml`] (shape-only).
+    /// output. Identical to [`crate::models::GenExtreme::revert2ml`] (shape-only),
+    /// including the Rust-only near-−1 widening (`shape <= -0.96`, via
+    /// [`crate::models::gev_near_minus_one_shape`]) that guards the DMGS `1/fhat`
+    /// blow-up as `shape -> -1+`.
     pub fn revert2ml(&self, shape: f64) -> bool {
-        shape.abs() >= 1.0
+        shape.abs() >= 1.0 || crate::models::gev_near_minus_one_shape(shape)
     }
 
     /// The reference `qgev_p1_cp` `ml_max`: the finite upper endpoint for a
@@ -299,6 +303,21 @@ mod tests {
                 "genextreme_p1(no t) = gev logpdf",
             );
         }
+    }
+
+    #[test]
+    fn revert2ml_matches_plain_gev() {
+        // Issue #4: the `_p1` guard is the reference `|shape| >= 1` plus the
+        // near-−1 widening (`shape <= -0.96`), identical to `GenExtreme`.
+        let m = GenExtremeP1::without_predictor();
+        let g = crate::models::genextreme::GenExtreme;
+        for &s in &[
+            -2.0, -1.2, -1.0, -0.99, -0.97, -0.96, -0.959, -0.95, -0.5, 0.0, 0.5, 1.0, 1.5,
+        ] {
+            assert_eq!(m.revert2ml(s), g.revert2ml(s), "revert2ml({s})");
+        }
+        assert!(m.revert2ml(-0.99));
+        assert!(!m.revert2ml(-0.95));
     }
 
     #[test]
