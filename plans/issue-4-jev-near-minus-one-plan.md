@@ -14,8 +14,8 @@ Scope: **plan only** — no code in this document's authoring step.
 > the "Notes" column. This file is the single source of truth for resuming an
 > interrupted run — do not rely on conversation history.
 
-**Last updated:** 2026-11-23T03:52Z (S8 complete; S9 left for the orchestrator)
-**Current step:** S9 — push, CI, PR (orchestrator)
+**Last updated:** 2026-11-23T04:06Z (S9 complete: branch pushed, CI green, PR opened)
+**Current step:** complete — all subtasks done
 
 | # | Subtask | Status | Notes |
 |---|---------|--------|-------|
@@ -27,7 +27,7 @@ Scope: **plan only** — no code in this document's authoring step.
 | S6 | Tighten `hail_region_divergence` non-finite assertion (target 0) | `[x]` | `KNOWN_NEAR_MINUS_ONE_NONFINITE = 0`; measured: non-finite 0, huge finite 192 (unchanged), `> 1%` 1080 (58.1%), `> 10%` 1075 |
 | S7 | Update `tests/golden/TOLERANCE.md` (§3.14c / §8.2) and `tests/golden/README.md` | `[x]` | Added §3.14d, §5 constants row, §8.2 post-Issue-#4 row + resolution; README inventory row |
 | S8 | Full local verification in the dev container | `[x]` | All green: build, 214 lib + all harnesses, clippy `-D warnings`, fmt, bench `--no-run`; R 221 pass; Python 141 pass/1 skip (updated `test_gev_p1_accepts_predictor_args` for the reverted `_p1` fit) |
-| S9 | Push branch, watch GitHub Actions green, open PR with `Closes #4` | `[ ]` | |
+| S9 | Push branch, watch GitHub Actions green, open PR with `Closes #4` | `[x]` | Pushed `3b6d02e`; CI run green (Detect source changes, Build dev Docker image, Rust pinned, Rust stable, R testthat, Python maturin+pytest all `success`; perf comparison skipped as manual-only); PR opened with `Closes #4` |
 
 ---
 
