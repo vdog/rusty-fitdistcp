@@ -1,5 +1,31 @@
 Always use the docker container for development tools.  Do not attempt to install them or search for them on the host system.
 
+## Code map — revert2ml / valid_params (do not re-derive; read these once)
+
+Guard definitions (4, near-identical by design — NOT duplicates to reconcile):
+- `models/genextreme.rs:234`      GenExtreme          (GEV, |shape|>=1, widened to <=-0.96)
+- `models/genextreme_p1.rs:171`   GenExtremeP1        (predictor, same logic)
+- `models/genextreme_p12.rs:268`  GenExtremeP12       (two-predictor, Phase 2)
+- `models/genpareto.rs:140`       GenPareto           ((|v2hat|>=1) || (v2hat>30), -0.98 band)
+
+Threshold constants: `models/mod.rs:189` (GPD margin), `:222` (GEV, Issue #4),
+`:256`-`:266` (GPD-vs-GEV margin docs).
+
+valid_params / valid_params_for:
+- trait defaults `models/mod.rs:445`, `:462` (the latter delegates to the former)
+- GEV `genextreme.rs:287`, `:317`   P1 `genextreme_p1.rs:246`, `:263`
+- P12 `genextreme_p12.rs:352`, `:370`   GPD `genpareto.rs:200`
+
+Enforcement call sites (where the guard actually changes output):
+- `mle/mod.rs:260` filters candidates through `valid_params_for`
+- `api.rs:496/507/515` (GEV), `:632/641` (GPD), `:1013/1015`, `:1100/1102`
+- R binding `crates/fitdistcp-r/src/rust/src/lib.rs:746+` (10+ `revert2ml` fields)
+- Py binding `crates/fitdistcp-py/src/lib.rs:1266+` (20+ occurrences);
+  note `:1441` and `:1473` use raw `shape <= -1.0` instead of the model method.
+
+Ignore: `crates/fitdistcp-r/src/rust/fitdistcp-core/**` (vendored copy — edit the top-level
+crate only), plus `target/`, `.venv/`, `__pycache__/`, `*.so`, `*.rlib`.
+
 ## GitHub operations: prefer the GitHub MCP server
 
 When a task involves GitHub (issues, pull requests, comments, reviews, branches, releases, CI status), use the **GitHub MCP server tools** rather than shelling out to `gh` or hand-rolling `curl` calls. The MCP server is already authenticated and gives structured results.
