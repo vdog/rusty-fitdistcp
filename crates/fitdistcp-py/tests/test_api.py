@@ -519,7 +519,13 @@ def test_gev_p1_accepts_predictor_args():
     # returns `cp_method = "no pdf/cdf"`). The Rust port emits a non-reference
     # `cp_pdf` derived from the CP quantiles at the `p` grid, so its length is
     # `len(p)` (here 1, the default `p = [0.5]`), not `len(y)`.
-    assert res["cp_pdf"].shape == (1,)
+    #
+    # Issue #4: this record's `_p1` fit lands at shape ~ -0.9997, inside the
+    # near-−1 revert band (`shape <= -0.96`), so the CP output reverts to the ML
+    # output and `cp_pdf` is the ML density at `y` (length `len(y)`), not the
+    # CP-quantile-derived density at `p`. Assert the reverted shape.
+    assert res["revert2ml"] is True
+    assert res["cp_pdf"].shape == Y_GEV.shape
 
 
 def test_gev_p1_predictor_semantics():

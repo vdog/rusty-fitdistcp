@@ -38,10 +38,17 @@
 //!
 //! After Phase A (monotone + support-clamped CP quantiles) and Phase 3 (robust
 //! multi-start MLE) the divergence counts should be **lower** than the pre-fix
-//! reference counts, and the non-finite count should be **zero** (the Phase 3
-//! `valid_params` guard rejects the degenerate `scale -> 0` fit that produced
-//! the NaNs). The harness asserts the non-finite count is zero and records the
-//! divergence counts as a regression baseline (see
+//! reference counts. The non-finite count is **zero**, but for two distinct
+//! reasons:
+//!
+//! - the Phase 3 `valid_params` guard rejects the degenerate `scale -> 0` fit
+//!   (item B), and
+//! - the Issue #4 near-−1 `revert2ml` widening (`shape <= -0.96`) reverts the
+//!   DMGS `1/fhat` blow-up at a shape just above −1 to the finite ML output
+//!   (item C's GEV analogue). Before Issue #4 these 9 regions produced `NaN`.
+//!
+//! The harness asserts the non-finite count is zero and records the divergence
+//! counts as a regression baseline (see
 //! [`tests/golden/TOLERANCE.md`](../../tests/golden/TOLERANCE.md) §8).
 //!
 //! # Determinism
@@ -294,21 +301,25 @@ fn hail_region_divergences_are_recorded_and_finite() {
         counts.huge_finite, counts.fitted
     );
 
-    // The non-finite CP return levels are the DMGS expansion being singular at
+    // The non-finite CP return levels were the DMGS expansion being singular at
     // a near-−1 fitted shape (shape ~ -0.99, just above the `revert2ml`
-    // threshold of 1) on very short records (n = 3-8) — again item C's GEV
-    // analogue, not item B. Pinned to the known value.
+    // threshold of 1) on very short records (n = 3-8) — item C's GEV analogue,
+    // not item B.
     //
     // Issue 2 re-check (item A): the CP quantiles are no longer clamped to the
-    // GEV support, so these near-−1 singularities surface as NaN rather than
+    // GEV support, so these near-−1 singularities surfaced as NaN rather than
     // being masked by the clamp. This matches the reference (which does not
     // clamp either).
-    const KNOWN_NEAR_MINUS_ONE_NONFINITE: usize = 9;
+    //
+    // Issue #4: the GEV `revert2ml` guard now also fires for `shape <= -0.96`
+    // (`GEV_NEAR_MINUS_ONE_DELTA`), so every near-−1 fit reverts to the (finite)
+    // ML output and the non-finite count is **zero**. The count is asserted
+    // exactly so a regression that removes the guard is caught.
+    const KNOWN_NEAR_MINUS_ONE_NONFINITE: usize = 0;
     assert_eq!(
         counts.non_finite, KNOWN_NEAR_MINUS_ONE_NONFINITE,
-        "the non-finite CP return levels must be exactly the known near-−1 \
-         DMGS singularities (item C's GEV analogue), not the item-B degeneracy; \
-         got {} of {}",
+        "the non-finite CP return levels must be zero (Issue #4: the near-−1 \
+         GEV fits revert to the ML output); got {} of {}",
         counts.non_finite, counts.fitted
     );
 

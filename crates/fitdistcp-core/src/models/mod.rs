@@ -219,15 +219,54 @@ pub(crate) fn gev_data_spread(y: &[f64]) -> f64 {
 /// (`-0.9835`) and far below the nearest legitimate reference shape (`-0.95`).
 pub(crate) const GPD_NEAR_MINUS_ONE_DELTA: f64 = 0.02;
 
-/// Whether a shape is in the near-−1 DMGS blow-up band (Issue 2 re-check,
-/// item C1).
+/// Near-−1 shape margin for the **GEV** DMGS `revert2ml` guard (Issue #4).
+///
+/// The GEV has the same DMGS `1/fhat` blow-up as the GPD as `shape -> -1+`, but
+/// the onset is **record-dependent** and reaches further from −1 than the GPD's
+/// tight `(-0.988, -0.9835)` band. On the 9 non-finite hail regions (short
+/// records, `n = 3–8`) the raw DMGS CP `q99` first leaves the support
+/// `loc - scale/shape` at shapes between `-0.900` and `-0.9755`, and goes `NaN`
+/// at the fitted shapes `-0.9669` and `-0.9767` — both **above** the GPD's
+/// `-0.98` threshold, which is why the GPD delta alone leaves 2 residuals.
+///
+/// # Threshold calibration (Issue #4)
+///
+/// - **Blow-up onset.** Sweeping the shape at the fitted `(loc, scale)` over the
+///   affected records and a 4000-record short-record corpus, the onset ranges
+///   `[-0.9755, -0.900]`; the two residuals that survive `-0.98` are at
+///   `-0.9669` and `-0.9767`.
+/// - **Legitimate fits.** Over 20 000 short (`n = 3–8`) records the reference
+///   `optim` shape is **never** in `(-1, -0.90)` except twice (`-0.9342`,
+///   `-0.9140`); 8537/20000 land `<= -1` (revert). The nearest legitimate
+///   reference shape above −1 is `-0.9140`.
+/// - **Choice.** `delta = 0.04` (`shape <= -0.96`) is the smallest value that
+///   drives the hail-corpus non-finite count to **0** (measured: `0.02` → 2,
+///   `0.03` → 1, `0.04` → 0), and it sits well below the nearest legitimate
+///   reference shape (`-0.9140`), leaving headroom. Only 14 of 1859 corpus fits
+///   fall in `(-1, -0.96]`, all near-−1 (the reference never lands there).
+///
+/// The GEV delta is deliberately **wider** than the GPD delta; the two are kept
+/// separate so the GPD calibration (item C1) is not disturbed.
+pub(crate) const GEV_NEAR_MINUS_ONE_DELTA: f64 = 0.04;
+
+/// Whether a **GPD** shape is in the near-−1 DMGS blow-up band (Issue 2
+/// re-check, item C1).
 ///
 /// Returns `true` when `shape <= -1 + GPD_NEAR_MINUS_ONE_DELTA` (i.e.
-/// `shape <= -0.98`). Shared by the GPD `revert2ml` guard; the GEV analogue
-/// (the 9 non-finite hail regions, shapes in `[-0.998, -0.967]`) is a
-/// documented follow-up and is **not** wired in here yet.
+/// `shape <= -0.98`). Used by the GPD `revert2ml` guard. The GEV uses the wider
+/// [`gev_near_minus_one_shape`] (Issue #4).
 pub(crate) fn near_minus_one_shape(shape: f64) -> bool {
     shape <= -1.0 + GPD_NEAR_MINUS_ONE_DELTA
+}
+
+/// Whether a **GEV** shape is in the near-−1 DMGS blow-up band (Issue #4).
+///
+/// Returns `true` when `shape <= -1 + GEV_NEAR_MINUS_ONE_DELTA` (i.e.
+/// `shape <= -0.96`). Used by the `GenExtreme`, `GenExtremeP1`, and
+/// `GenExtremeP12` `revert2ml` guards. See [`GEV_NEAR_MINUS_ONE_DELTA`] for the
+/// calibration.
+pub(crate) fn gev_near_minus_one_shape(shape: f64) -> bool {
+    shape <= -1.0 + GEV_NEAR_MINUS_ONE_DELTA
 }
 
 /// Whether a GEV `(loc, scale)` pair is in the degenerate region **relative to

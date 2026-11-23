@@ -371,6 +371,44 @@ shapes (Rust `~ -0.988` vs. reference `~ -1.46`); the low-`p` quantiles differ b
 up to ~30% for the same reason, so only the tail is pinned tightly. The
 regression assertions (reverted / not flat / monotone) are exact.
 
+### 3.14d GEV near-−1 revert — Issue #4
+
+| Constant | rtol | atol | Applies to |
+|---|---|---|---|
+| `GEV_NEAR_MINUS_ONE_TAIL_RTOL` / `_ATOL` | `5e-2` | `1e-6` | 1-in-100 CP quantile on the short (`n = 8`, `n = 5`) near-−1 GEV fixture (Rust `predict_gev` vs. the reference `qgev_cp`). |
+| `MAX_CP_OVER_DATA` | — | — | Bound (`1.1`) on the CP curve's maximum as a multiple of `max(y)`. |
+
+**Rationale.** The GEV has the same DMGS `1/fhat` blow-up as the GPD as
+`shape -> -1+`, but the onset is **record-dependent** and reaches further from −1
+than the GPD's tight band. On the 9 non-finite hail regions (short records,
+`n = 3–8`) the raw DMGS CP `q99` first leaves the support `loc - scale/shape` at
+shapes between `-0.900` and `-0.9755`, and goes `NaN` at the fitted shapes
+`-0.9669` and `-0.9767` — both **above** the GPD's `-0.98` threshold. Issue #4
+therefore introduces a **GEV-specific** delta, `GEV_NEAR_MINUS_ONE_DELTA = 0.04`
+(`shape <= -0.96`), the smallest value that drives the hail-corpus non-finite
+count to **0** (measured: `0.02` → 2, `0.03` → 1, `0.04` → 0). It sits well below
+the nearest legitimate reference shape (`-0.9140`, from a 20 000-record short
+sweep), so it does not over-trigger. The GPD delta (`0.02`) is left untouched.
+The reference `optim` never lands in `(-1, -0.90)`, so this only affects the Rust
+multi-start.
+
+**Fixture.** [`gev_near_minus_one_golden.json`](gev_near_minus_one_golden.json)
+(generator
+[`tools/generate_gev_near_minus_one_golden.R`](../../tools/generate_gev_near_minus_one_golden.R))
+pins the reference CP quantiles on two fixed short records (the hail-surrogate
+regions 824 and 1647) whose Rust ML shape lands in the near-−1 band. The harness
+([`gev_near_minus_one_golden.rs`](../crates/fitdistcp-core/tests/gev_near_minus_one_golden.rs))
+asserts the Rust fit **reverts** (`cp_quantiles == ml_quantiles`), the CP
+quantiles are **finite** (the pre-fix output was `NaN`), the curve is **not flat
+far above the data** (`max(cp) <= MAX_CP_OVER_DATA * max(y)`), the curve is
+monotone, and the 1-in-100 quantile matches the reference within
+`GEV_NEAR_MINUS_ONE_TAIL_RTOL`. The tail tolerance is loose because the two fits
+land at different (both valid) near-−1 shapes (Rust `~ -0.967` / `~ -0.977` vs.
+reference `~ -1.09` / `~ -1.13`); the low-`p` quantiles differ for the same
+reason, so only the tail is pinned tightly. A separate test pins the *symptom* by
+computing the raw DMGS CP on the fitted parameters (bypassing the revert) and
+asserting it is non-finite, so a regression that removes the guard is caught.
+
 ### 3.15 Short-record robust ML optimiser — Phase 3
 
 | Constant | rtol | atol | Applies to |
@@ -534,6 +572,7 @@ than by loosening a tolerance blindly.
 | GEV CP tail (item A1/A2) | [`crates/fitdistcp-core/tests/gev_cp_tail_golden.rs`](../crates/fitdistcp-core/tests/gev_cp_tail_golden.rs) | `CPQ_RTOL`, `CPQ_ATOL`, `OPT_RTOL`, `OPT_ATOL`, `FDALPHA` |
 | GEV degenerate fits (item B1/B2) | [`crates/fitdistcp-core/tests/gev_degenerate_golden.rs`](../crates/fitdistcp-core/tests/gev_degenerate_golden.rs) | `CPQ_RTOL`, `CPQ_ATOL`, `MAX_MEANINGFUL_CP`, `FDALPHA` |
 | GPD small-n near-−1 (item C1) | [`crates/fitdistcp-core/tests/gpd_smalln_negshape_golden.rs`](../crates/fitdistcp-core/tests/gpd_smalln_negshape_golden.rs) | `GPD_SMALLN_NEGSHAPE_TAIL_RTOL`, `GPD_SMALLN_NEGSHAPE_TAIL_ATOL`, `MAX_CP_OVER_DATA` |
+| GEV near-−1 (Issue #4) | [`crates/fitdistcp-core/tests/gev_near_minus_one_golden.rs`](../crates/fitdistcp-core/tests/gev_near_minus_one_golden.rs) | `GEV_NEAR_MINUS_ONE_TAIL_RTOL`, `GEV_NEAR_MINUS_ONE_TAIL_ATOL`, `MAX_CP_OVER_DATA` |
 | Short-record optimiser (Phase 3) | [`crates/fitdistcp-core/tests/short_record_golden.rs`](../crates/fitdistcp-core/tests/short_record_golden.rs) | `RTOL`, `ATOL`, `OPT_RTOL`, `OPT_ATOL` |
 | W11 CP (GEV/GPD/p1) | [`crates/fitdistcp-core/tests/w11_cp_golden.rs`](../crates/fitdistcp-core/tests/w11_cp_golden.rs) | `GPD_RTOL`, `GPD_ATOL`, `GEV_RTOL`, `GEV_ATOL`, `NORMP1_DMGS_RTOL`, `NORMP1_DMGS_ATOL`, `NORMP1_TRUNC_RTOL`, `NORMP1_TRUNC_ATOL` |
 | W14 predictor | [`crates/fitdistcp-core/tests/w14_predictor.rs`](../crates/fitdistcp-core/tests/w14_predictor.rs) | `RTOL`, `ATOL`, `RTOL_CP_Q` |
@@ -687,6 +726,7 @@ divergences (`> 1%`, `> 10%`) and non-finite CP return levels.
 | Corpus (synthetic surrogate, 2000 regions) | `> 1%` | `> 10%` | degenerate (item B2) | huge finite | non-finite |
 |--------------------------------------------|--------|---------|----------------------|-------------|------------|
 | measured (post-fix, items A–F)             | 1063 (57.2%) | 1017 | **0** | 192 | 9 |
+| measured (post-Issue #4)                   | 1080 (58.1%) | 1075 | **0** | 192 | **0** |
 | pre-fix reference (real MESH)              | 39.1%  | 794     | — | — | 121 |
 | pre-fix reference (real hail reports)      | 18.9%  | 329     | — | — | 42  |
 
@@ -695,25 +735,28 @@ guard rejects the `scale -> 0` spurious maximum, so the multi-start finds a vali
 interior candidate on every region and no fit is flagged `degenerate_fit`. This
 is the item-B guarantee and the harness asserts it **exactly** (`== 0`).
 
-**Result (items A and C analogues).** The remaining 192 **huge finite** and 9
-**non-finite** CP return levels are **not** the item-B degeneracy:
+**Result (items A and C analogues).** The remaining 192 **huge finite** CP return
+levels are **not** the item-B degeneracy:
 
 - The 192 huge-finite regions all have **valid** parameters
   (`degenerate_fit == false`) and a **large positive shape** (≥ 3.2, median
   ~7.4) — the DMGS small-`n` blow-up, i.e. the GEV analogue of item C, which item
-  B does not address.
-- The 9 non-finite regions are GEV fits with shapes in `[-0.998, -0.967]` — the
+  B does not address. This count is **unchanged** by Issue #4 (the near-−1 guard
+  cannot fire for positive shapes).
+- The 9 non-finite regions (GEV fits with shapes in `[-0.998, -0.967]`) were the
   DMGS expansion being singular at a near-−1 shape, again item C's GEV analogue.
   **Item A unmasked these**: the removed `ml_max`/`fixgevrange` clamp had been
-  masking them as finite values. This matches the reference, which does not clamp
-  either.
+  masking them as finite values. **Issue #4 resolves them**: the GEV `revert2ml`
+  guard now fires for `shape <= -0.96` (`GEV_NEAR_MINUS_ONE_DELTA = 0.04`, §3.14d),
+  so every near-−1 fit reverts to the finite ML output and the non-finite count
+  is **0**.
 
 Both counts are **pinned** in the harness (`KNOWN_LARGE_POSITIVE_SHAPE_HUGE = 192`,
-`KNOWN_NEAR_MINUS_ONE_NONFINITE = 9`) so a regression that reintroduces the
-item-B degeneracy (which would raise them) is caught. Wiring the shared
-`near_minus_one_shape` predicate into the GEV `revert2ml` would remove the 9
-non-finite regions; that is left as a documented follow-up (plan §7 open
-question 3) so the GEV goldens are not disturbed.
+`KNOWN_NEAR_MINUS_ONE_NONFINITE = 0`) so a regression that reintroduces the
+item-B degeneracy (which would raise them) is caught. The `> 1%` / `> 10%` counts
+shifted slightly (1063 → 1080, 1017 → 1075) because the 9 reverted regions now
+contribute their (small) CP-vs-ML divergence instead of being counted as
+non-finite `> 10%` divergences.
 
 **Known limitation (documented residual).** The synthetic-surrogate divergence
 percentages are **not** directly comparable to the real-data pre-fix percentages:
