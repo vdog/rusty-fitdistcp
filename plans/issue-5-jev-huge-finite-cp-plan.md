@@ -14,8 +14,8 @@ Scope: **plan only** — no code in this document's authoring step.
 > the "Notes" column. This file is the single source of truth for resuming an
 > interrupted run — do not rely on conversation history.
 
-**Last updated:** 2026-11-28T02:02Z (S4 complete)
-**Current step:** S5 — not started
+**Last updated:** 2026-11-28T02:05Z (S5 complete — all subtasks done)
+**Current step:** S6 — awaiting orchestrator (push + PR)
 
 | # | Subtask | Status | Notes |
 |---|---------|--------|-------|
@@ -23,7 +23,7 @@ Scope: **plan only** — no code in this document's authoring step.
 | S2 | Filter the surrogate to `n >= 8` non-zero years; recompute and re-pin the huge-finite count | `[x]` | Done. `MIN_NON_ZERO_YEARS = 8`; filtered huge-finite = **24** (fitted 978, skipped 1022), stable across 3 runs. Unfiltered historical count (192, fitted 1859) reproduced by `hail_region_unfiltered_huge_finite_count_is_192`. `degenerate == 0` / `non_finite == 0` unchanged. |
 | S3 | Add a Rust-only `unsupported_record` flag (ξ ≥ 1 or small n), flag only, no numeric change | `[x]` | **Implemented.** `FitResult::unsupported_record` + `MIN_SUPPORTED_N = 8`; set in `predict_gev` (`shape >= 1.0 \|\| y.len() < 8`), `false` at the other 7 sites. Surfaced in Python `base_dict()` and all four R list builders. 3 unit tests (ξ≥3 true, benign false, short true); CP unchanged (`cp_quantiles == ml_quantiles`). Full core suite green (217 lib + all integration). |
 | S4 | Update `TOLERANCE.md` §3.14b/§8.2, `tests/golden/README.md`, and the harness doc-comments to record the reference-matching decision | `[x]` | Done. §3.14b: reference-matching paragraph + `unsupported_record` flag note. §8.2: n≥8 table row (779/776/0/24/0) + "Result (Issue #5)" block. README: new fixture row + regeneration commands. Harness doc-comments updated in S2. |
-| S5 | Full CI-equivalent verification in the `dev` docker container; record results | `[ ]` | cargo test, clippy, fmt, R testthat, Python pytest |
+| S5 | Full CI-equivalent verification in the `dev` docker container; record results | `[x]` | All green — see §8. `cargo fmt --check` OK; `cargo clippy --workspace --all-targets -D warnings` clean; `cargo test -p fitdistcp-core` 217 lib + all integration suites pass; R testthat 221 pass / 0 fail; Python pytest 141 pass / 1 skip. |
 | S6 | Push branch, watch GitHub Actions green, open PR with `Closes #5` (GitHub MCP) | `[ ]` | Only if the user asks for a PR |
 
 ---
@@ -404,3 +404,30 @@ docker compose run --rm dev cargo test --workspace
 docker compose run --rm dev cargo clippy --workspace --all-targets -- -D warnings
 docker compose run --rm dev cargo fmt --check
 ```
+
+---
+
+## 8. Results (S5 verification, 2026-11-28)
+
+All commands run in the `dev` docker container.
+
+| Check | Command | Result |
+|-------|---------|--------|
+| Format | `cargo fmt --check --all` | **OK** |
+| Lint | `cargo clippy --workspace --all-targets -- -D warnings` | **clean** (fixed 9 `excessive_precision` lints in the new S3 test literals) |
+| Core tests | `cargo test -p fitdistcp-core` | **217 lib + all integration suites pass, 0 failed** |
+| Huge-finite golden | `cargo test -p fitdistcp-core --test gev_huge_finite_golden -- --nocapture` | **4 passed** (n9/n11/n6 reference-matching, n10 optimizer-dependent) |
+| Hail harness | `cargo test -p fitdistcp-core --test hail_region_divergence -- --nocapture` | **4 passed**; filtered huge-finite = **24** (fitted 978, skipped 1022); unfiltered historical = **192** (fitted 1859) |
+| R testthat | `bash tools/vendor-r-crate.sh && cd crates/fitdistcp-r && R -e "devtools::load_all(quiet=TRUE); testthat::test_dir('tests/testthat', stop_on_failure=TRUE)"` | **221 pass / 0 fail / 0 warn / 0 skip** |
+| Python pytest | `cd crates/fitdistcp-py && python3 -m venv .venv && . .venv/bin/activate && pip install --quiet numpy pytest && maturin develop --quiet && pytest -q` | **141 passed / 1 skipped** |
+
+**No numeric output changed.** Every existing golden fixture still passes at its
+documented tolerance; the only new numeric artefact is the S2 re-pinned
+huge-finite count (192 → 24 on the `n >= 8` regime).
+
+### S3 decision
+
+**Implemented** (not deferred). `FitResult::unsupported_record` +
+`MIN_SUPPORTED_N = 8`; set in `predict_gev` only; `false` at the other 7 sites;
+surfaced in both bindings as a flag only. No API breakage: the field is additive
+and the reference-port tests still pass.
