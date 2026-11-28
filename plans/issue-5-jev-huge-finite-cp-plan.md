@@ -14,12 +14,12 @@ Scope: **plan only** — no code in this document's authoring step.
 > the "Notes" column. This file is the single source of truth for resuming an
 > interrupted run — do not rely on conversation history.
 
-**Last updated:** 2026-11-28T01:48Z (plan authored; no subtasks started)
-**Current step:** S1 — not started
+**Last updated:** 2026-11-28T01:56Z (S1 complete)
+**Current step:** S2 — not started
 
 | # | Subtask | Status | Notes |
 |---|---------|--------|-------|
-| S1 | Golden fixture from R `qgev_cp` on representative huge-finite records + Rust golden harness asserting Rust CP == reference CP | `[ ]` | Makes the check "real" (CP-vs-reference, not CP-vs-Rust-ML) |
+| S1 | Golden fixture from R `qgev_cp` on representative huge-finite records + Rust golden harness asserting Rust CP == reference CP | `[x]` | Done. `tools/generate_gev_huge_finite_golden.R` + `tests/golden/gev_huge_finite_golden.json` + `crates/fitdistcp-core/tests/gev_huge_finite_golden.rs` (4 records: n9/n11/n6 revert+huge, n10 optimizer-dependent). Value-level comparison not meaningful (different ξ>1 maxima; Rust multi-start non-reproducible on n11) → structural assertions (both revert, both huge, finite, monotone) + ratio band on stable records. Verified it fails when `revert2ml` is disabled. |
 | S2 | Filter the surrogate to `n >= 8` non-zero years; recompute and re-pin the huge-finite count | `[ ]` | Do **not** hardcode 192; measure the new value |
 | S3 | Add a Rust-only `unsupported_record` flag (ξ ≥ 1 or small n), flag only, no numeric change | `[ ]` | Defer with a written rationale if not feasible |
 | S4 | Update `TOLERANCE.md` §3.14b/§8.2, `tests/golden/README.md`, and the harness doc-comments to record the reference-matching decision | `[ ]` | |
