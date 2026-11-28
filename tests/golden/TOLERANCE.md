@@ -340,6 +340,42 @@ the relative guard; the control must still match the reference at `CPQ_RTOL`.
 The degenerate records are compared by **bound**, not by value, because the Rust
 fit intentionally diverges from the reference's degenerate output.
 
+**Issue #5 — the huge-finite values are reference-matching, not a defect.** The
+huge finite CP return levels (`|cp| > 1e6`) that remain after item B are **not**
+a Rust defect. The maintainer verified that they **match the reference**: every
+huge value has ML `xi >= 3.1` (median ~7.5), and the reference also reverts to
+the ML quantile when `|xi| >= 1` (`qgev_cp` in `110a_gev.R`), so the CP level
+**is** the ML quantile — huge for both implementations (a GEV with `xi > 1` has
+an extremely heavy tail). On real hail regions with `>= 8` non-zero years the
+1-in-50 `> 10` counts agree (Rust 235 vs. reference 231 for MESH; 140 vs. 145
+for reports). The decision is therefore **documentation + a real regression
+check**, not a numeric change: `revert2ml = TRUE` already identifies every
+affected case, and no clamping / NaN-ing / re-fitting is applied.
+
+The regression check is the golden fixture
+[`gev_huge_finite_golden.json`](gev_huge_finite_golden.json) (generator
+[`tools/generate_gev_huge_finite_golden.R`](../../tools/generate_gev_huge_finite_golden.R)),
+which pins the reference `qgev_cp` output on four representative huge-finite
+records (n = 9, 11, 6 revert+huge; n = 10 optimizer-dependent). The harness
+([`gev_huge_finite_golden.rs`](../crates/fitdistcp-core/tests/gev_huge_finite_golden.rs))
+asserts the Rust CP output is **reference-matching** — both sides revert, both
+CP 1-in-100 values are finite and `> HUGE_CP_BOUND`, and the curve is finite and
+monotone — rather than merely `cp_quantiles == ml_quantiles` (which is trivially
+true after a revert). A value-level comparison is **not** meaningful because the
+two optimizers land on different `xi > 1` maxima (and the Rust multi-start is
+not bit-reproducible on the n = 11 record); a loose ratio band
+(`[1e-6, 1e6]`) is asserted only on the stable records. The `n = 10` record
+documents the optimizer-dependence (reference `xi ~ 0.58`, no revert; Rust
+`xi ~ 5.2`, revert).
+
+**Issue #5 — `unsupported_record` flag (flag only).** A new
+[`FitResult::unsupported_record`](../crates/fitdistcp-core/src/api.rs) flag is
+set (in `predict_gev` only) when the GEV ML shape is `xi >= 1` or the non-zero
+sample size is below `MIN_SUPPORTED_N = 8`. It is **advisory only** — it does
+**not** change any numeric output (`cp_quantiles`, `cp_pdf`, `revert2ml`,
+`degenerate_fit` are computed exactly as before). It is surfaced in both
+bindings (Python `unsupported_record`, R `unsupported_record`).
+
 ### 3.14c GPD small-`n` near-−1 revert — item C1
 
 | Constant | rtol | atol | Applies to |
@@ -725,22 +761,31 @@ divergences (`> 1%`, `> 10%`) and non-finite CP return levels.
 
 | Corpus (synthetic surrogate, 2000 regions) | `> 1%` | `> 10%` | degenerate (item B2) | huge finite | non-finite |
 |--------------------------------------------|--------|---------|----------------------|-------------|------------|
-| measured (post-fix, items A–F)             | 1063 (57.2%) | 1017 | **0** | 192 | 9 |
-| measured (post-Issue #4)                   | 1080 (58.1%) | 1075 | **0** | 192 | **0** |
+| measured (post-fix, items A–F, n ≥ 3)      | 1063 (57.2%) | 1017 | **0** | 192 | 9 |
+| measured (post-Issue #4, n ≥ 3)            | 1080 (58.1%) | 1075 | **0** | 192 | **0** |
+| measured (post-Issue #5, **n ≥ 8**)        | 779 (79.7%) | 776 | **0** | **24** | **0** |
 | pre-fix reference (real MESH)              | 39.1%  | 794     | — | — | 121 |
 | pre-fix reference (real hail reports)      | 18.9%  | 329     | — | — | 42  |
+
+The **n ≥ 8** row is the Issue #5 filter (`MIN_NON_ZERO_YEARS = 8`): the
+maintainer's real-data evidence is restricted to regions with `>= 8` non-zero
+years ("records of 2-7 points aren't fitted in practice"). Filtering leaves
+**978** fitted regions (1022 skipped) and **24** huge-finite regions. The
+`> 1%` / `> 10%` percentages shift because the short records (which dominated
+the divergence counts) are excluded; that is expected and is **not** asserted
+against the old values.
 
 **Result (item B).** The **degenerate-fit count is zero** — the item-B1 relative
 guard rejects the `scale -> 0` spurious maximum, so the multi-start finds a valid
 interior candidate on every region and no fit is flagged `degenerate_fit`. This
 is the item-B guarantee and the harness asserts it **exactly** (`== 0`).
 
-**Result (items A and C analogues).** The remaining 192 **huge finite** CP return
+**Result (items A and C analogues).** The remaining **huge finite** CP return
 levels are **not** the item-B degeneracy:
 
-- The 192 huge-finite regions all have **valid** parameters
-  (`degenerate_fit == false`) and a **large positive shape** (≥ 3.2, median
-  ~7.4) — the DMGS small-`n` blow-up, i.e. the GEV analogue of item C, which item
+- The huge-finite regions all have **valid** parameters
+  (`degenerate_fit == false`) and a **large positive shape** (≥ 3, median
+  ~7.5) — the DMGS small-`n` blow-up, i.e. the GEV analogue of item C, which item
   B does not address. This count is **unchanged** by Issue #4 (the near-−1 guard
   cannot fire for positive shapes).
 - The 9 non-finite regions (GEV fits with shapes in `[-0.998, -0.967]`) were the
@@ -751,12 +796,19 @@ levels are **not** the item-B degeneracy:
   so every near-−1 fit reverts to the finite ML output and the non-finite count
   is **0**.
 
-Both counts are **pinned** in the harness (`KNOWN_LARGE_POSITIVE_SHAPE_HUGE = 192`,
+**Result (Issue #5).** The huge-finite values are **reference-matching**, not a
+Rust defect (see §3.14b): the reference also reverts to the ML quantile when
+`|xi| >= 1`, and a GEV with `xi > 1` has an extremely heavy tail, so the ML
+1-in-100 return level is huge for both implementations. The count is therefore a
+**regression baseline**, not a defect count. It is measured on the `n >= 8`
+regime and pinned to the measured value (`KNOWN_LARGE_POSITIVE_SHAPE_HUGE = 24`,
 `KNOWN_NEAR_MINUS_ONE_NONFINITE = 0`) so a regression that reintroduces the
-item-B degeneracy (which would raise them) is caught. The `> 1%` / `> 10%` counts
-shifted slightly (1063 → 1080, 1017 → 1075) because the 9 reverted regions now
-contribute their (small) CP-vs-ML divergence instead of being counted as
-non-finite `> 10%` divergences.
+item-B degeneracy (which would raise it) is caught. The historical **unfiltered**
+(n ≥ 3) count of **192** (fitted 1859) is still reproduced by
+`hail_region_unfiltered_huge_finite_count_is_192` for the record. The `> 1%` /
+`> 10%` counts shifted (1063 → 1080 → 779) because the 9 reverted regions now
+contribute their (small) CP-vs-ML divergence, and the Issue #5 filter excludes
+the short records that dominated the divergence counts.
 
 **Known limitation (documented residual).** The synthetic-surrogate divergence
 percentages are **not** directly comparable to the real-data pre-fix percentages:

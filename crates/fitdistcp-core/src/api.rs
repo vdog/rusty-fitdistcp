@@ -160,7 +160,32 @@ pub struct FitResult {
     /// the optimizer status. This is documented in
     /// [`tests/golden/TOLERANCE.md`](../../tests/golden/TOLERANCE.md).
     pub degenerate_fit: bool,
+    /// `true` when the record is **outside the regime the reference is
+    /// validated for** (Issue #5): the GEV ML shape is `xi >= 1`, or the
+    /// non-zero sample size is below [`MIN_SUPPORTED_N`].
+    ///
+    /// This is a **flag only** — it does **not** change any numeric output.
+    /// The CP quantiles, CP density, `revert2ml`, and `degenerate_fit` are
+    /// computed exactly as before. The flag lets callers detect that the
+    /// returned (possibly huge) CP return level comes from a record the
+    /// reference does not claim to support: a GEV with `xi >= 1` has an
+    /// extremely heavy tail, so the ML 1-in-100 return level is huge for both
+    /// implementations (the reference also reverts to the ML quantile when
+    /// `|xi| >= 1`), and records with fewer than [`MIN_SUPPORTED_N`] non-zero
+    /// years are not fitted in practice.
+    ///
+    /// It is `false` for every model other than the plain GEV
+    /// ([`predict_gev`]) and for GEV records inside the supported regime.
+    pub unsupported_record: bool,
 }
+
+/// The minimum number of non-zero years below which a GEV record is flagged
+/// [`FitResult::unsupported_record`] (Issue #5).
+///
+/// Matches the `n >= 8` regime the maintainer's real-data evidence is
+/// restricted to ("records of 2-7 points aren't fitted in practice"). The flag
+/// is advisory only — it does not change any numeric output.
+pub const MIN_SUPPORTED_N: usize = 8;
 
 impl FitResult {
     /// Convenience predicate: `true` only when the underlying fit converged.
@@ -332,6 +357,8 @@ where
         cp_monotone_clamped: false,
         // The analytic closed-form models have no degenerate region.
         degenerate_fit: false,
+        // Issue #5: the unsupported-record flag is GEV-only.
+        unsupported_record: false,
     }
 }
 
@@ -421,6 +448,8 @@ pub fn predict<M: crate::dmgs::DmgsModel + Copy + Sync>(
         cp_monotone_clamped: false,
         // The generic DMGS path does not detect a degenerate fit.
         degenerate_fit: false,
+        // Issue #5: the unsupported-record flag is GEV-only.
+        unsupported_record: false,
     }
 }
 
@@ -506,6 +535,13 @@ pub fn predict_gev(
     // set `degenerate_fit = true` so callers can detect the invalid fit.
     let degenerate_fit = !model.valid_params_for(&mle.ml_params, &req.y);
 
+    // Issue #5: flag (only) a record outside the regime the reference is
+    // validated for — a GEV ML shape `xi >= 1` (extremely heavy tail, so the
+    // ML 1-in-100 return level is huge for both implementations) or fewer than
+    // `MIN_SUPPORTED_N` non-zero years. This does **not** change any numeric
+    // output; it only lets callers detect the unsupported regime.
+    let unsupported_record = shape >= 1.0 || req.y.len() < MIN_SUPPORTED_N;
+
     // Tracks whether the CP-quantile monotonicity guard fired (Phase A, Issue 4).
     let mut cp_monotone_clamped = false;
     let (cp_pdf, cp_quantiles) = if degenerate_fit {
@@ -579,6 +615,7 @@ pub fn predict_gev(
         start: mle.start.clone(),
         cp_monotone_clamped,
         degenerate_fit,
+        unsupported_record,
     }
 }
 
@@ -699,6 +736,8 @@ pub fn predict_gpd(
         // The GPD CP path does not detect a degenerate fit (item C handles the
         // GPD near-−1 regime separately).
         degenerate_fit: false,
+        // Issue #5: the unsupported-record flag is GEV-only.
+        unsupported_record: false,
     }
 }
 
@@ -783,6 +822,8 @@ pub fn predict_gamma(req: &PredictionRequest, init: &[f64]) -> FitResult {
         cp_monotone_clamped: false,
         // The gamma CP path does not detect a degenerate fit.
         degenerate_fit: false,
+        // Issue #5: the unsupported-record flag is GEV-only.
+        unsupported_record: false,
     }
 }
 
@@ -1056,6 +1097,8 @@ pub fn predict_gev_p1(
         cp_monotone_clamped: false,
         // The genextreme_p12 CP path does not detect a degenerate fit.
         degenerate_fit: false,
+        // Issue #5: the unsupported-record flag is GEV-only.
+        unsupported_record: false,
     }
 }
 
@@ -1143,6 +1186,8 @@ pub fn predict_gev_p12(
         cp_monotone_clamped: false,
         // The genextreme_p1 CP path does not detect a degenerate fit.
         degenerate_fit: false,
+        // Issue #5: the unsupported-record flag is GEV-only.
+        unsupported_record: false,
     }
 }
 
@@ -1285,9 +1330,89 @@ mod tests {
             start: vec![0.0, 1.0],
             cp_monotone_clamped: false,
             degenerate_fit: false,
+            unsupported_record: false,
         };
         assert!(result.is_converged());
         assert_eq!(result.ml_params.len(), 2);
+    }
+
+    #[test]
+    fn unsupported_record_flag_is_true_for_large_positive_shape() {
+        // Issue #5: a GEV record whose ML shape is xi >= 1 is flagged
+        // unsupported_record (the reference does not claim to support it), but
+        // the numeric output is unchanged (CP == ML after the revert).
+        use crate::models::GenExtreme;
+        // n = 9 huge-finite record (Rust shape ~ 9.37).
+        let y = vec![
+            0.3876952502967869,
+            9.392801801140093,
+            2.219970461327077,
+            7.275570605428353,
+            0.8203269906875107,
+            1.0345629731391943,
+            0.3865054610432146,
+            2.7959264959148005,
+            1.639341466516022,
+        ];
+        let req = PredictionRequest {
+            y,
+            x: vec![],
+            p: vec![0.99],
+            t: None,
+            t0: None,
+            n0: None,
+            means: None,
+        };
+        let r = predict_gev(GenExtreme, &req, &[0.0, 1.0, 0.1], 0.01);
+        assert!(r.ml_params[2] >= 1.0, "shape {}", r.ml_params[2]);
+        assert!(r.unsupported_record, "the flag must be true for xi >= 1");
+        // Flag only: the CP output is still the (reverted) ML output.
+        assert_eq!(r.cp_quantiles, r.ml_quantiles);
+        assert!(r.cp_quantiles[0].is_finite());
+    }
+
+    #[test]
+    fn unsupported_record_flag_is_false_for_benign_record() {
+        // Issue #5: a bening GEV record (xi < 1, n >= 8) is not flagged.
+        use crate::models::GenExtreme;
+        let y = vec![1.02, 1.55, 1.31, 1.88, 1.12, 1.67, 1.44, 1.21, 1.95, 1.38];
+        let req = PredictionRequest {
+            y,
+            x: vec![],
+            p: vec![0.99],
+            t: None,
+            t0: None,
+            n0: None,
+            means: None,
+        };
+        let r = predict_gev(GenExtreme, &req, &[1.4, 0.3, -0.1], 0.01);
+        assert!(r.ml_params[2] < 1.0, "shape {}", r.ml_params[2]);
+        assert!(
+            !r.unsupported_record,
+            "the flag must be false for a bening record"
+        );
+    }
+
+    #[test]
+    fn unsupported_record_flag_is_true_for_short_record() {
+        // Issue #5: a GEV record with fewer than MIN_SUPPORTED_N non-zero years
+        // is flagged unsupported_record even when the shape is bening.
+        use crate::models::GenExtreme;
+        let y = vec![1.02, 1.55, 1.31, 1.88, 1.12]; // n = 5 < 8
+        let req = PredictionRequest {
+            y,
+            x: vec![],
+            p: vec![0.99],
+            t: None,
+            t0: None,
+            n0: None,
+            means: None,
+        };
+        let r = predict_gev(GenExtreme, &req, &[1.4, 0.3, -0.1], 0.01);
+        assert!(
+            r.unsupported_record,
+            "the flag must be true for n < MIN_SUPPORTED_N"
+        );
     }
 
     // --- W10: small-n propagation through the CP path ----------------------

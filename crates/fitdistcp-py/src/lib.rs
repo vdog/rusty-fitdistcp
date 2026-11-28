@@ -433,6 +433,9 @@ fn base_dict<'py>(py: Python<'py>, r: &FitResult) -> PyResult<Bound<'py, PyDict>
     d.set_item("cp_monotone_clamped", r.cp_monotone_clamped)?;
     // Issue 2 re-check (item B2): whether the fit is degenerate (CP output NaN).
     d.set_item("degenerate_fit", r.degenerate_fit)?;
+    // Issue #5: whether the record is outside the reference-validated regime
+    // (GEV xi >= 1 or n < MIN_SUPPORTED_N). Flag only — no numeric change.
+    d.set_item("unsupported_record", r.unsupported_record)?;
     Ok(d)
 }
 
