@@ -455,6 +455,8 @@ fn q_cp_list(r: &FitResult, cp_method: &str, extra: Vec<(&str, Robj)>) -> List {
         "cp_monotone_clamped",
         // Issue 2 re-check (item B2): whether the fit is degenerate.
         "degenerate_fit",
+        // Issue #5: whether the record is outside the reference-validated regime.
+        "unsupported_record",
     ];
     let mut values: Vec<Robj> = vec![
         doubles(r.ml_params.clone()).into(),
@@ -473,6 +475,7 @@ fn q_cp_list(r: &FitResult, cp_method: &str, extra: Vec<(&str, Robj)>) -> List {
         cp_method.into(),
         r.cp_monotone_clamped.into(),
         r.degenerate_fit.into(),
+        r.unsupported_record.into(),
     ];
     for (n, v) in extra {
         names.push(n);
@@ -493,6 +496,8 @@ fn d_cp_list(r: &FitResult, cp_method: &str, extra: Vec<(&str, Robj)>) -> List {
         "cp_monotone_clamped",
         // Issue 2 re-check (item B2): whether the fit is degenerate.
         "degenerate_fit",
+        // Issue #5: whether the record is outside the reference-validated regime.
+        "unsupported_record",
     ];
     let mut values: Vec<Robj> = vec![
         doubles(r.ml_params.clone()).into(),
@@ -502,6 +507,7 @@ fn d_cp_list(r: &FitResult, cp_method: &str, extra: Vec<(&str, Robj)>) -> List {
         cp_method.into(),
         r.cp_monotone_clamped.into(),
         r.degenerate_fit.into(),
+        r.unsupported_record.into(),
     ];
     for (n, v) in extra {
         names.push(n);
@@ -533,6 +539,8 @@ fn p_cp_list(
         "cp_monotone_clamped",
         // Issue 2 re-check (item B2): whether the fit is degenerate.
         "degenerate_fit",
+        // Issue #5: whether the record is outside the reference-validated regime.
+        "unsupported_record",
     ];
     let mut values: Vec<Robj> = vec![
         doubles(r.ml_params.clone()).into(),
@@ -542,6 +550,7 @@ fn p_cp_list(
         cp_method.into(),
         r.cp_monotone_clamped.into(),
         r.degenerate_fit.into(),
+        r.unsupported_record.into(),
     ];
     for (n, v) in extra {
         names.push(n);
@@ -562,6 +571,8 @@ fn r_cp_list(r: &FitResult, cp_method: &str, extra: Vec<(&str, Robj)>) -> List {
         "cp_monotone_clamped",
         // Issue 2 re-check (item B2): whether the fit is degenerate.
         "degenerate_fit",
+        // Issue #5: whether the record is outside the reference-validated regime.
+        "unsupported_record",
     ];
     let mut values: Vec<Robj> = vec![
         doubles(r.ml_params.clone()).into(),
@@ -571,6 +582,7 @@ fn r_cp_list(r: &FitResult, cp_method: &str, extra: Vec<(&str, Robj)>) -> List {
         cp_method.into(),
         r.cp_monotone_clamped.into(),
         r.degenerate_fit.into(),
+        r.unsupported_record.into(),
     ];
     for (n, v) in extra {
         names.push(n);
