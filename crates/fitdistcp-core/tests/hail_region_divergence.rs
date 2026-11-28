@@ -19,6 +19,16 @@
 //! **non-zero years** only). The generator is fixed-seed, so the counts are a
 //! reproducible regression baseline.
 //!
+//! # Issue #5: the `n >= 8` filter
+//!
+//! The maintainer's real-data evidence is restricted to regions with `>= 8`
+//! non-zero years ("records of 2-7 points aren't fitted in practice"). The
+//! harness therefore skips regions with fewer than [`MIN_NON_ZERO_YEARS`] (`8`)
+//! non-zero years, so the pinned counts reflect the records actually fitted.
+//! The **unfiltered** (n >= 3) huge-finite count (192) is still reproduced by
+//! [`hail_region_unfiltered_huge_finite_count_is_192`] for the historical
+//! record.
+//!
 //! # What is measured
 //!
 //! For each synthetic region:
@@ -51,6 +61,18 @@
 //! counts as a regression baseline (see
 //! [`tests/golden/TOLERANCE.md`](../../tests/golden/TOLERANCE.md) §8).
 //!
+//! # Issue #5: the huge-finite count is reference-matching, not a defect
+//!
+//! The remaining huge-finite CP return levels (`|cp| > HUGE_CP_BOUND`) are
+//! **not** a Rust defect. The maintainer verified that they **match the
+//! reference**: every huge value has ML `xi >= 3` (median ~7.5), and the
+//! reference also reverts to the ML quantile when `|xi| >= 1`, so the CP level
+//! **is** the ML quantile — huge for both implementations (a GEV with `xi > 1`
+//! has an extremely heavy tail). The count is therefore a **regression
+//! baseline**, pinned to the measured value on the `n >= 8` regime. See
+//! [`tests/golden/TOLERANCE.md`](../../tests/golden/TOLERANCE.md) §3.14b/§8.2
+//! and [`crate::gev_huge_finite_golden`] for the reference-CP golden check.
+//!
 //! # Determinism
 //!
 //! The surrogate generator is seeded with a fixed constant ([`SEED`]) so the
@@ -68,6 +90,15 @@ pub const SEED: u64 = 0xCA11_B8A7_0000_0002;
 
 /// Number of synthetic regions per corpus.
 pub const N_REGIONS: usize = 2000;
+
+/// The minimum number of **non-zero** years a region must have to be fitted.
+///
+/// Issue #5: the maintainer's real-data evidence is restricted to regions with
+/// `>= 8` non-zero years ("records of 2-7 points aren't fitted in practice").
+/// The surrogate is filtered to the same regime so the pinned huge-finite count
+/// reflects the records that are actually fitted. The pre-filter (n >= 3) count
+/// is still reported for the historical record.
+pub const MIN_NON_ZERO_YEARS: usize = 8;
 
 /// The 1-in-100 probability level (`p = 0.99`).
 pub const P_1IN100: f64 = 0.99;
@@ -168,6 +199,9 @@ pub struct DivergenceCounts {
     pub huge_finite: usize,
     /// Total number of regions with at least one non-zero year (fitted).
     pub fitted: usize,
+    /// Number of regions skipped because they had fewer than
+    /// [`MIN_NON_ZERO_YEARS`] non-zero years (Issue #5 filter).
+    pub skipped: usize,
 }
 
 /// The bound above which a CP return level is considered a **huge finite**
@@ -187,9 +221,10 @@ impl DivergenceCounts {
 
 /// Fit each region's non-zero years and count the CP-vs-MLE divergences.
 ///
-/// A region with fewer than 3 non-zero years is skipped (the GEV has 3
-/// parameters and cannot be fit). A non-finite CP return level is counted as a
-/// non-finite and also as a `> 10%` divergence (the worst case).
+/// A region with fewer than [`MIN_NON_ZERO_YEARS`] non-zero years is skipped
+/// (Issue #5: the maintainer's real-data evidence is restricted to `>= 8`
+/// non-zero years). A non-finite CP return level is counted as a non-finite and
+/// also as a `> 10%` divergence (the worst case).
 pub fn count_divergences(regions: &[Region]) -> DivergenceCounts {
     let mut counts = DivergenceCounts {
         gt_1pct: 0,
@@ -198,11 +233,13 @@ pub fn count_divergences(regions: &[Region]) -> DivergenceCounts {
         degenerate: 0,
         huge_finite: 0,
         fitted: 0,
+        skipped: 0,
     };
 
     for region in regions {
         let y = region.non_zero_years();
-        if y.len() < 3 {
+        if y.len() < MIN_NON_ZERO_YEARS {
+            counts.skipped += 1;
             continue;
         }
         counts.fitted += 1;
@@ -260,7 +297,11 @@ fn hail_region_divergences_are_recorded_and_finite() {
     let counts = count_divergences(&regions);
 
     println!("Phase C hail-region divergence harness (synthetic surrogate, {N_REGIONS} regions):");
-    println!("  fitted regions: {}", counts.fitted);
+    println!(
+        "  fitted regions (n >= {MIN_NON_ZERO_YEARS} non-zero years): {}",
+        counts.fitted
+    );
+    println!("  skipped (n < {MIN_NON_ZERO_YEARS}): {}", counts.skipped);
     println!("  > 1%:  {} ({:.1}%)", counts.gt_1pct, counts.pct_gt_1());
     println!("  > 10%: {}", counts.gt_10pct);
     println!("  non-finite: {}", counts.non_finite);
@@ -287,17 +328,24 @@ fn hail_region_divergences_are_recorded_and_finite() {
 
     // The remaining huge finite CP return levels are **not** the item-B
     // `scale -> 0` degeneracy. They are the DMGS expansion blowing up at a
-    // large **positive** shape (all 192 have shape >= 3.2, median ~7.4) on
-    // short records — the GEV analogue of item C (the GPD near-−1 blow-up),
-    // which item B does not address. The count is pinned to the known value so
-    // a regression that reintroduces the item-B degeneracy (which would raise
-    // it) is caught. See the plan §8 B1 notes for the evidence.
-    const KNOWN_LARGE_POSITIVE_SHAPE_HUGE: usize = 192;
+    // large **positive** shape (all have shape >= 3, median ~7.5) on short
+    // records — the GEV analogue of item C (the GPD near-−1 blow-up), which
+    // item B does not address.
+    //
+    // Issue #5: the maintainer verified that these values are
+    // **reference-matching** (the reference also reverts to the ML quantile
+    // when `|xi| >= 1`, and a GEV with `xi > 1` has an extremely heavy tail, so
+    // the ML 1-in-100 return level is huge for both implementations). The
+    // count is therefore a **regression baseline**, not a defect count. It is
+    // measured on the `n >= MIN_NON_ZERO_YEARS` regime (the records actually
+    // fitted in practice) and pinned to the measured value so a regression that
+    // reintroduces the item-B degeneracy (which would raise it) is caught. See
+    // `tests/golden/TOLERANCE.md` §3.14b/§8.2 and the plan §3.2.
+    const KNOWN_LARGE_POSITIVE_SHAPE_HUGE: usize = 24;
     assert_eq!(
         counts.huge_finite, KNOWN_LARGE_POSITIVE_SHAPE_HUGE,
-        "the huge finite CP return levels must be exactly the known \
-         large-positive-shape DMGS blow-up (item C's GEV analogue), not the \
-         item-B degeneracy; got {} of {}",
+        "the huge finite CP return levels must be exactly the pinned \
+         reference-matching count (n >= {MIN_NON_ZERO_YEARS}); got {} of {}",
         counts.huge_finite, counts.fitted
     );
 
@@ -331,6 +379,44 @@ fn hail_region_divergences_are_recorded_and_finite() {
     assert!(
         counts.gt_1pct <= counts.fitted,
         "the > 1% count must not exceed the fitted-region count"
+    );
+}
+
+/// Historical record (Issue #5): the **unfiltered** surrogate (n >= 3, the
+/// pre-Issue-#5 skip) produced 192 huge-finite regions. The filtered harness
+/// (`n >= MIN_NON_ZERO_YEARS`) pins 24. This test reproduces the 192 figure so
+/// the historical number stays reproducible and the before/after is auditable.
+#[test]
+fn hail_region_unfiltered_huge_finite_count_is_192() {
+    let regions = synthetic_hail_regions(SEED, N_REGIONS);
+    let mut huge_finite = 0usize;
+    let mut fitted = 0usize;
+    for region in &regions {
+        let y = region.non_zero_years();
+        if y.len() < 3 {
+            continue;
+        }
+        fitted += 1;
+        let req = PredictionRequest {
+            y,
+            x: vec![],
+            p: vec![P_1IN100],
+            t: None,
+            t0: None,
+            n0: None,
+            means: None,
+        };
+        let fit = predict_gev(GenExtreme, &req, &[0.0, 1.0, 0.1], FDALPHA);
+        let cp = fit.cp_quantiles[0];
+        if cp.is_finite() && cp.abs() > HUGE_CP_BOUND {
+            huge_finite += 1;
+        }
+    }
+    println!("unfiltered (n >= 3): fitted = {fitted}, huge finite = {huge_finite}");
+    assert_eq!(
+        huge_finite, 192,
+        "the unfiltered (n >= 3) huge-finite count must stay 192 (historical \
+         Issue #5 record); got {huge_finite} of {fitted}"
     );
 }
 
