@@ -14,15 +14,15 @@ Scope: **plan only** — no code in this document's authoring step.
 > the "Notes" column. This file is the single source of truth for resuming an
 > interrupted run — do not rely on conversation history.
 
-**Last updated:** 2026-11-28T02:01Z (S3 complete)
-**Current step:** S4 — not started
+**Last updated:** 2026-11-28T02:02Z (S4 complete)
+**Current step:** S5 — not started
 
 | # | Subtask | Status | Notes |
 |---|---------|--------|-------|
 | S1 | Golden fixture from R `qgev_cp` on representative huge-finite records + Rust golden harness asserting Rust CP == reference CP | `[x]` | Done. `tools/generate_gev_huge_finite_golden.R` + `tests/golden/gev_huge_finite_golden.json` + `crates/fitdistcp-core/tests/gev_huge_finite_golden.rs` (4 records: n9/n11/n6 revert+huge, n10 optimizer-dependent). Value-level comparison not meaningful (different ξ>1 maxima; Rust multi-start non-reproducible on n11) → structural assertions (both revert, both huge, finite, monotone) + ratio band on stable records. Verified it fails when `revert2ml` is disabled. |
 | S2 | Filter the surrogate to `n >= 8` non-zero years; recompute and re-pin the huge-finite count | `[x]` | Done. `MIN_NON_ZERO_YEARS = 8`; filtered huge-finite = **24** (fitted 978, skipped 1022), stable across 3 runs. Unfiltered historical count (192, fitted 1859) reproduced by `hail_region_unfiltered_huge_finite_count_is_192`. `degenerate == 0` / `non_finite == 0` unchanged. |
 | S3 | Add a Rust-only `unsupported_record` flag (ξ ≥ 1 or small n), flag only, no numeric change | `[x]` | **Implemented.** `FitResult::unsupported_record` + `MIN_SUPPORTED_N = 8`; set in `predict_gev` (`shape >= 1.0 \|\| y.len() < 8`), `false` at the other 7 sites. Surfaced in Python `base_dict()` and all four R list builders. 3 unit tests (ξ≥3 true, benign false, short true); CP unchanged (`cp_quantiles == ml_quantiles`). Full core suite green (217 lib + all integration). |
-| S4 | Update `TOLERANCE.md` §3.14b/§8.2, `tests/golden/README.md`, and the harness doc-comments to record the reference-matching decision | `[ ]` | |
+| S4 | Update `TOLERANCE.md` §3.14b/§8.2, `tests/golden/README.md`, and the harness doc-comments to record the reference-matching decision | `[x]` | Done. §3.14b: reference-matching paragraph + `unsupported_record` flag note. §8.2: n≥8 table row (779/776/0/24/0) + "Result (Issue #5)" block. README: new fixture row + regeneration commands. Harness doc-comments updated in S2. |
 | S5 | Full CI-equivalent verification in the `dev` docker container; record results | `[ ]` | cargo test, clippy, fmt, R testthat, Python pytest |
 | S6 | Push branch, watch GitHub Actions green, open PR with `Closes #5` (GitHub MCP) | `[ ]` | Only if the user asks for a PR |
 
