@@ -14,8 +14,8 @@ Scope: **plan only** — no code in this document's authoring step.
 > the "Notes" column. This file is the single source of truth for resuming an
 > interrupted run — do not rely on conversation history.
 
-**Last updated:** 2026-11-28T02:05Z (S5 complete — all subtasks done)
-**Current step:** S6 — awaiting orchestrator (push + PR)
+**Last updated:** 2026-11-28T02:14Z (S6 CI green — branch pushed, all jobs pass)
+**Current step:** S6 — complete (CI green; PR not opened per user instruction)
 
 | # | Subtask | Status | Notes |
 |---|---------|--------|-------|
@@ -24,7 +24,7 @@ Scope: **plan only** — no code in this document's authoring step.
 | S3 | Add a Rust-only `unsupported_record` flag (ξ ≥ 1 or small n), flag only, no numeric change | `[x]` | **Implemented.** `FitResult::unsupported_record` + `MIN_SUPPORTED_N = 8`; set in `predict_gev` (`shape >= 1.0 \|\| y.len() < 8`), `false` at the other 7 sites. Surfaced in Python `base_dict()` and all four R list builders. 3 unit tests (ξ≥3 true, benign false, short true); CP unchanged (`cp_quantiles == ml_quantiles`). Full core suite green (217 lib + all integration). |
 | S4 | Update `TOLERANCE.md` §3.14b/§8.2, `tests/golden/README.md`, and the harness doc-comments to record the reference-matching decision | `[x]` | Done. §3.14b: reference-matching paragraph + `unsupported_record` flag note. §8.2: n≥8 table row (779/776/0/24/0) + "Result (Issue #5)" block. README: new fixture row + regeneration commands. Harness doc-comments updated in S2. |
 | S5 | Full CI-equivalent verification in the `dev` docker container; record results | `[x]` | All green — see §8. `cargo fmt --check` OK; `cargo clippy --workspace --all-targets -D warnings` clean; `cargo test -p fitdistcp-core` 217 lib + all integration suites pass; R testthat 221 pass / 0 fail; Python pytest 141 pass / 1 skip. |
-| S6 | Push branch, watch GitHub Actions green, open PR with `Closes #5` (GitHub MCP) | `[ ]` | Only if the user asks for a PR |
+| S6 | Push branch, watch GitHub Actions green, open PR with `Closes #5` (GitHub MCP) | `[x]` | Branch `issue-5-jev-huge-finite-cp` pushed; CI green on `c89cdce` — Rust (pinned) ✅, Rust (stable) ✅, Python ✅, R ✅, Docker build ✅, Detect source changes ✅ (Docs-only + manual perf intentionally skipped). PR not opened (user asked to watch CI only). |
 
 ---
 
